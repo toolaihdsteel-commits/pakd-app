@@ -1140,7 +1140,13 @@ const App=()=>{
   const resultRef=useRef(null);
   // Lưu PA mua hiện tại lên GitHub
   const savePAToGithub=useCallback(async()=>{
-    // Hỏi ghi chú yêu cầu trước khi lưu
+    // Hỏi tên người gửi (bắt buộc)
+    const lastName=localStorage.getItem('pakd_last_sender')||inputs.creator||'';
+    const senderName=prompt(`👤 Bạn là ai? (Tên người gửi PA)\n\nVí dụ: "Huy - Trưởng phòng KD" hoặc "Anh A - NV mua hàng"`,lastName);
+    if(senderName===null) return; // user nhấn Cancel
+    if(!senderName||!senderName.trim()){alert('⚠ Vui lòng nhập tên người gửi');return;}
+    try{localStorage.setItem('pakd_last_sender',senderName.trim());}catch(e){}
+    // Hỏi ghi chú yêu cầu
     const requestNote=prompt('📝 Ghi chú yêu cầu duyệt (gửi đến Giám đốc):\n\nVí dụ: "Cần duyệt gấp, NCC chốt 17h hôm nay" hoặc để trống nếu không có');
     if(requestNote===null) return; // user nhấn Cancel
     setGhStatus(p=>({...p,loading:true,error:null}));
@@ -1152,8 +1158,8 @@ const App=()=>{
       const r=resultRef.current;
       const payload={
         savedAt:now.toISOString(),
-        savedBy:inputs.creator||'Unknown',
-        requestedBy:inputs.creator||'Unknown',
+        savedBy:senderName.trim(),
+        requestedBy:senderName.trim(),
         requestNote:requestNote.trim()||null,
         version:'PAKD 7.0',
         status:'pending',          // Phê duyệt: pending/approved/rejected
@@ -1182,13 +1188,34 @@ const App=()=>{
       alert(`❌ Lỗi khi lưu PA:\n${e.message}`);
     }
   },[ghAPI,inputs,products,inventory,ghConfig.branch]);
-  // List các PA đã lưu
+  // List các PA đã lưu (kèm fetch metadata: status, requestedBy, requestNote)
   const listPAsFromGithub=useCallback(async()=>{
     setGhStatus(p=>({...p,loading:true,error:null}));
     try{
       const data=await ghAPI('GET','contents/plans');
       const files=(data||[]).filter(f=>f.name.endsWith('.json')).sort((a,b)=>b.name.localeCompare(a.name));
-      setGhStatus(p=>({...p,loading:false,plansList:files,loadOpen:true}));
+      // Fetch nội dung từng file để lấy metadata (giới hạn 30 file mới nhất để tránh chậm)
+      const filesWithMeta=await Promise.all(files.slice(0,30).map(async f=>{
+        try{
+          const fileData=await ghAPI('GET',`contents/plans/${f.name}`);
+          const content=decodeURIComponent(escape(atob(fileData.content.replace(/\n/g,''))));
+          const payload=JSON.parse(content);
+          return{
+            ...f,
+            _status:payload.status||'pending',
+            _requestedBy:payload.requestedBy||payload.savedBy||'?',
+            _requestNote:payload.requestNote||'',
+            _approvedBy:payload.approvedBy||null,
+            _approvedAt:payload.approvedAt||null,
+            _savedAt:payload.savedAt||null,
+            _totalVND:payload.snapshot?.totalVND||0,
+            _totalKg:payload.snapshot?.totalKg||0,
+          };
+        }catch(e){
+          return{...f,_status:'error',_requestedBy:'?',_requestNote:'(không đọc được nội dung)'};
+        }
+      }));
+      setGhStatus(p=>({...p,loading:false,plansList:filesWithMeta,loadOpen:true}));
     }catch(e){
       setGhStatus(p=>({...p,loading:false,error:e.message,plansList:[]}));
       alert(`❌ Lỗi khi tải danh sách PA:\n${e.message}`);
@@ -1259,8 +1286,20 @@ const App=()=>{
     }
   },[ghAPI,ghConfig.branch]);
 
-  // ─── LỊCH SỬ GIÁ SÀN — Lưu lên GitHub theo tháng ───
-  const [floorStatus,setFloorStatus]=useState({loading:false,error:null,lastAction:null,viewOpen:false,monthsList:[],selectedMonth:null,monthData:null});
+  // ═══════════════════════════════════════════════════════
+  // WORKFLOW GIÁ SÀN — Pending → Approved → History (theo TUẦN)
+  // ═══════════════════════════════════════════════════════
+  const [floorStatus,setFloorStatus]=useState({
+    loading:false,error:null,lastAction:null,
+    viewOpen:false,            // Modal danh sách Sàn pending/approved
+    selectedFile:null,         // File đang xem chi tiết
+    selectedData:null,         // Nội dung file đang xem
+    pendingList:[],            // Files trong /floor/pending/
+    approvedList:[],           // Files trong /floor/approved/
+    history:[],                // Nội dung file /floor/history.json
+    historyOpen:false,         // Modal xem history
+    activeTab:'pending',       // pending | approved
+  });
 
   // ═══════════════════════════════════════════════════════
   // PIN DUYỆT — Xác thực giám đốc khi phê duyệt
@@ -1329,115 +1368,217 @@ const App=()=>{
     if(!serverHash){alert('⚠ Chưa thiết lập PIN duyệt. Vui lòng vào ⚙️ → "Thiết lập PIN" trước.');return false;}
     return hash===serverHash;
   },[pinStatus.hashOnServer,loadPinHash]);
-  // Lưu floorHistory hiện tại lên file của tháng tương ứng
-  const saveFloorHistoryToGithub=useCallback(async()=>{
-    if(!floorHistory||floorHistory.length===0){alert('⚠ Chưa có lịch sử sàn để lưu');return;}
+  // Helper: lấy tuần ISO label "2026-W21" từ Date
+  const getWeekLabel=(d)=>{
+    const dt=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+    const dayNum=dt.getUTCDay()||7;
+    dt.setUTCDate(dt.getUTCDate()+4-dayNum);
+    const yearStart=new Date(Date.UTC(dt.getUTCFullYear(),0,1));
+    const wk=Math.ceil((((dt-yearStart)/86400000)+1)/7);
+    return `${dt.getUTCFullYear()}-W${String(wk).padStart(2,'0')}`;
+  };
+
+  // GỬI Giá sàn → /floor/pending/ (Trưởng phòng dùng)
+  const submitFloorToGithub=useCallback(async(mgmtDataLocal)=>{
+    const publishedGroups=(mgmtDataLocal||[]).filter(g=>g.publishedFloor&&g.skus>0);
+    if(publishedGroups.length===0){alert('⚠ Chưa có nhóm nào ban hành Sàn. Hãy nhập Sàn ban hành trước.');return;}
+    // Hỏi tên người gửi
+    const lastSender=localStorage.getItem('pakd_last_sender')||inputs.creator||'';
+    const senderName=prompt(`👤 Bạn là ai? (Tên người ban hành Sàn)\n\nVí dụ: "Huy - Trưởng phòng KD"`,lastSender);
+    if(senderName===null) return;
+    if(!senderName.trim()){alert('⚠ Vui lòng nhập tên');return;}
+    try{localStorage.setItem('pakd_last_sender',senderName.trim());}catch(e){}
+    // Hỏi ghi chú
+    const note=prompt('📝 Ghi chú yêu cầu duyệt Sàn:\n\nVí dụ: "Sàn cho tuần 21, áp dụng từ Thứ 2"');
+    if(note===null) return;
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
-      // Nhóm các entry theo tháng (lấy từ issuedDate dd/mm/yyyy)
-      const byMonth={};
-      floorHistory.forEach(entry=>{
-        const ymd=parseVNDate(entry.issuedDate);
-        if(!ymd) return;
-        const d=new Date(ymd);
-        const monthKey=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-        if(!byMonth[monthKey]) byMonth[monthKey]=[];
-        byMonth[monthKey].push(entry);
+      const now=new Date();
+      const weekLabel=getWeekLabel(now);
+      const pad=n=>String(n).padStart(2,'0');
+      const timestamp=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}h${pad(now.getMinutes())}`;
+      const fname=`${weekLabel}_${timestamp}.json`;
+      const path=`contents/floor/pending/${fname}`;
+      const payload={
+        weekLabel,
+        savedAt:now.toISOString(),
+        savedBy:senderName.trim(),
+        requestedBy:senderName.trim(),
+        requestNote:note.trim()||null,
+        status:'pending',
+        approvedBy:null,approvedAt:null,
+        exchangeRate:inputs.exchangeRate,
+        storageCostPct:inputs.storageCostPct??2,
+        baseFinCostPct:inputs.baseFinCostPct??1.5,
+        opsCostPct:inputs.opsCostPct,
+        creditMode:inputs.creditMode,
+        groupsCount:publishedGroups.length,
+        groups:publishedGroups.map(g=>({
+          id:g.id,label:g.label,alloy:g.alloy,temper:g.temper,
+          minThick:g.minThick,maxThick:g.maxThick,
+          skus:g.skus,totalQty:g.totalQty,avgCost:g.avgCost,
+          autoFloor:g.avgFloor,publishedFloor:g.publishedFloor,
+          corePrice:g.corePrice,loyalPrice:g.loyalPrice,newPrice:g.newPrice,
+          avgCompPrice:g.avgCompPrice,avgCompFloor:g.avgCompFloor,
+        })),
+      };
+      const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
+      await ghAPI('PUT',path,{
+        message:`📤 Gửi duyệt Sàn ${weekLabel} bởi ${senderName.trim()} (${publishedGroups.length} nhóm)`,
+        content:contentB64,
+        branch:ghConfig.branch||'main',
       });
-      let savedCount=0;
-      for(const [monthKey,entries] of Object.entries(byMonth)){
-        const fname=`${monthKey}.json`;
-        const path=`contents/floor/${fname}`;
-        let sha=null;
-        // Check file đã tồn tại chưa để lấy SHA
-        try{const existing=await ghAPI('GET',path);sha=existing.sha;}catch(e){/* file chưa có, OK */}
-        const payload={
-          month:monthKey,
-          savedAt:new Date().toISOString(),
-          savedBy:inputs.creator||'Unknown',
-          status:'pending',
-          approvedBy:null,
-          approvedAt:null,
-          entriesCount:entries.length,
-          entries,
-        };
-        const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-        const body={message:`Lưu lịch sử sàn ${monthKey} (${entries.length} bản ban hành)`,content:contentB64,branch:ghConfig.branch||'main'};
-        if(sha) body.sha=sha;
-        await ghAPI('PUT',path,body);
-        savedCount++;
-      }
-      setFloorStatus(p=>({...p,loading:false,lastAction:`✓ Đã lưu ${savedCount} tháng lịch sử sàn`}));
-      alert(`✓ Lưu Lịch sử Sàn thành công!\nĐã lưu ${savedCount} tháng (mỗi tháng 1 file).`);
+      setFloorStatus(p=>({...p,loading:false,lastAction:`✓ Đã gửi Sàn ${weekLabel}`}));
+      alert(`✓ Đã gửi Sàn ${weekLabel} lên GitHub!\nFile: ${fname}\nGiám đốc cần vào duyệt để chính thức ban hành.`);
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
-      alert(`❌ Lỗi khi lưu Lịch sử Sàn:\n${e.message}`);
+      alert(`❌ Lỗi khi gửi Sàn:\n${e.message}`);
     }
-  },[ghAPI,floorHistory,inputs.creator,ghConfig.branch]);
-  // Tải danh sách tháng có lịch sử sàn
-  const listFloorMonths=useCallback(async()=>{
+  },[ghAPI,inputs,ghConfig.branch]);
+
+  // Tải danh sách Sàn pending + approved (Giám đốc xem)
+  const listFloorSubmissions=useCallback(async()=>{
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
-      const data=await ghAPI('GET','contents/floor');
-      const files=(data||[]).filter(f=>f.name.endsWith('.json')).sort((a,b)=>b.name.localeCompare(a.name));
-      setFloorStatus(p=>({...p,loading:false,monthsList:files,viewOpen:true,selectedMonth:null,monthData:null}));
+      // pending
+      let pendingFiles=[];
+      try{
+        const p1=await ghAPI('GET','contents/floor/pending');
+        pendingFiles=(p1||[]).filter(f=>f.name.endsWith('.json')).sort((a,b)=>b.name.localeCompare(a.name));
+      }catch(e){/* folder chưa có */}
+      // approved
+      let approvedFiles=[];
+      try{
+        const a1=await ghAPI('GET','contents/floor/approved');
+        approvedFiles=(a1||[]).filter(f=>f.name.endsWith('.json')).sort((a,b)=>b.name.localeCompare(a.name));
+      }catch(e){/* folder chưa có */}
+      // Fetch meta (limit 20 mỗi folder)
+      const fetchMeta=async(arr,folder)=>Promise.all(arr.slice(0,20).map(async f=>{
+        try{
+          const d=await ghAPI('GET',`contents/floor/${folder}/${f.name}`);
+          const content=decodeURIComponent(escape(atob(d.content.replace(/\n/g,''))));
+          const obj=JSON.parse(content);
+          return{...f,_data:obj};
+        }catch(e){return{...f,_data:null};}
+      }));
+      const [pMeta,aMeta]=await Promise.all([fetchMeta(pendingFiles,'pending'),fetchMeta(approvedFiles,'approved')]);
+      setFloorStatus(p=>({...p,loading:false,pendingList:pMeta,approvedList:aMeta,viewOpen:true,activeTab:'pending',selectedFile:null,selectedData:null}));
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
-      alert(`❌ Lỗi khi tải danh sách tháng:\n${e.message}`);
+      alert(`❌ Lỗi khi tải danh sách Sàn:\n${e.message}`);
     }
   },[ghAPI]);
-  // Load 1 tháng cụ thể về để xem chi tiết
-  const loadFloorMonth=useCallback(async(file)=>{
-    setFloorStatus(p=>({...p,loading:true,error:null}));
-    try{
-      const data=await ghAPI('GET',`contents/floor/${file.name}`);
-      const content=decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
-      const payload=JSON.parse(content);
-      setFloorStatus(p=>({...p,loading:false,selectedMonth:file.name,monthData:payload}));
-    }catch(e){
-      setFloorStatus(p=>({...p,loading:false,error:e.message}));
-      alert(`❌ Lỗi khi tải tháng ${file.name}:\n${e.message}`);
-    }
-  },[ghAPI]);
-  // Duyệt/Từ chối 1 tháng Lịch sử Sàn (yêu cầu PIN)
-  const reviewFloorMonth=useCallback(async(file,newStatus)=>{
+
+  // Duyệt 1 file Sàn pending → chuyển sang approved + append vào history.json
+  const reviewFloorSubmission=useCallback(async(file,folder,newStatus)=>{
     const verbTxt=newStatus==='approved'?'duyệt':'từ chối';
     const serverHash=pinStatus.hashOnServer||await loadPinHash();
     if(!serverHash){
-      if(!window.confirm('⚠ Chưa có PIN duyệt được thiết lập.\nNhấn OK để mở màn thiết lập PIN lần đầu.\nNhấn Cancel để hủy duyệt.')) return;
-      setPinStatus(p=>({...p,setupOpen:true,pendingAction:{type:'FLOOR',file,newStatus}}));
+      alert('⚠ Chưa có PIN duyệt được thiết lập. Vào ⚙️ GitHub → Kiểm tra/Thiết lập PIN.');
       return;
     }
-    const pin=prompt(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} LỊCH SỬ SÀN\n\nTháng: ${file.name}\n\n(PIN do Giám đốc giữ)`);
+    const pin=prompt(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} SÀN\n\nFile: ${file.name}\n\n(PIN do Giám đốc giữ)`);
     if(!pin) return;
     const ok=await verifyPin(pin);
     if(!ok){alert('❌ PIN SAI. Không có quyền duyệt.');return;}
     const reviewerName='Giám đốc (PIN xác thực ✓)';
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
-      const data=await ghAPI('GET',`contents/floor/${file.name}`);
+      // 1. Lấy file pending hiện tại
+      const data=await ghAPI('GET',`contents/floor/${folder}/${file.name}`);
       const content=decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
       const payload=JSON.parse(content);
       payload.status=newStatus;
-      payload.approvedBy=reviewerName.trim();
+      payload.approvedBy=reviewerName;
       payload.approvedAt=new Date().toISOString();
-      const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-      await ghAPI('PUT',`contents/floor/${file.name}`,{
-        message:`${newStatus==='approved'?'✓ Duyệt':'✗ Từ chối'} Lịch sử Sàn ${file.name} bởi ${reviewerName.trim()}`,
-        content:newContentB64,
-        sha:data.sha,
-        branch:ghConfig.branch||'main',
-      });
-      alert(`✓ Đã ${verbTxt} Lịch sử Sàn tháng: ${file.name}`);
+
+      if(newStatus==='approved'){
+        // 2. Tạo file mới trong /floor/approved/
+        const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
+        await ghAPI('PUT',`contents/floor/approved/${file.name}`,{
+          message:`✓ Duyệt Sàn ${file.name} bởi ${reviewerName}`,
+          content:newContentB64,
+          branch:ghConfig.branch||'main',
+        });
+        // 3. Xóa file pending cũ
+        await ghAPI('DELETE',`contents/floor/pending/${file.name}`,{
+          message:`Xóa pending sau khi duyệt: ${file.name}`,
+          sha:data.sha,
+          branch:ghConfig.branch||'main',
+        });
+        // 4. Append vào /floor/history.json
+        let historyArr=[];let historySha=null;
+        try{
+          const hd=await ghAPI('GET','contents/floor/history.json');
+          historySha=hd.sha;
+          const hc=decodeURIComponent(escape(atob(hd.content.replace(/\n/g,''))));
+          const hobj=JSON.parse(hc);
+          historyArr=Array.isArray(hobj)?hobj:(hobj.entries||[]);
+        }catch(e){/* chưa có history */}
+        historyArr.unshift({
+          weekLabel:payload.weekLabel,
+          approvedAt:payload.approvedAt,
+          approvedBy:payload.approvedBy,
+          requestedBy:payload.requestedBy,
+          requestNote:payload.requestNote,
+          groupsCount:payload.groupsCount,
+          groups:payload.groups,
+          exchangeRate:payload.exchangeRate,
+          sourceFile:file.name,
+        });
+        const histB64=btoa(unescape(encodeURIComponent(JSON.stringify(historyArr,null,2))));
+        const histBody={
+          message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,
+          content:histB64,
+          branch:ghConfig.branch||'main',
+        };
+        if(historySha) histBody.sha=historySha;
+        await ghAPI('PUT','contents/floor/history.json',histBody);
+        alert(`✓ Đã duyệt Sàn ${payload.weekLabel}\n→ Chuyển sang /floor/approved/\n→ Đã append vào history.json (tổng cộng ${historyArr.length} bản)`);
+      }else{
+        // Từ chối: ghi trạng thái rejected nhưng vẫn ở pending để Trưởng phòng biết
+        const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
+        await ghAPI('PUT',`contents/floor/${folder}/${file.name}`,{
+          message:`✗ Từ chối Sàn ${file.name} bởi ${reviewerName}`,
+          content:newContentB64,
+          sha:data.sha,
+          branch:ghConfig.branch||'main',
+        });
+        alert(`✗ Đã từ chối Sàn ${file.name}`);
+      }
       // Refresh
-      const list=await ghAPI('GET','contents/floor');
-      const files=(list||[]).filter(f=>f.name.endsWith('.json')).sort((a,b)=>b.name.localeCompare(a.name));
-      setFloorStatus(p=>({...p,loading:false,monthsList:files,monthData:payload}));
+      await listFloorSubmissions();
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi ${verbTxt}:\n${e.message}`);
     }
-  },[ghAPI,ghConfig.branch]);
+  },[ghAPI,ghConfig.branch,listFloorSubmissions]);
+
+  // Xem chi tiết 1 file Sàn
+  const viewFloorSubmission=useCallback(async(file,folder)=>{
+    setFloorStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const d=await ghAPI('GET',`contents/floor/${folder}/${file.name}`);
+      const content=decodeURIComponent(escape(atob(d.content.replace(/\n/g,''))));
+      const obj=JSON.parse(content);
+      setFloorStatus(p=>({...p,loading:false,selectedFile:{...file,_folder:folder},selectedData:obj}));
+    }catch(e){
+      setFloorStatus(p=>({...p,loading:false,error:e.message}));
+    }
+  },[ghAPI]);
+
+  // Tải history.json về xem ở tab Lịch sử
+  const loadFloorHistoryFromGithub=useCallback(async()=>{
+    setFloorStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const d=await ghAPI('GET','contents/floor/history.json');
+      const content=decodeURIComponent(escape(atob(d.content.replace(/\n/g,''))));
+      const arr=JSON.parse(content);
+      setFloorStatus(p=>({...p,loading:false,history:Array.isArray(arr)?arr:[],historyOpen:true}));
+    }catch(e){
+      setFloorStatus(p=>({...p,loading:false,error:e.message,history:[],historyOpen:true}));
+    }
+  },[ghAPI]);
 
   // Báo cáo Tồn kho theo tháng: ô điền tay (lưu localStorage)
   // Cấu trúc: {"03/2026":{tonCuoi:500000000, muaTrongThang:300000000, hmCap:1000000000}, ...}
@@ -2120,14 +2261,8 @@ URL.revokeObjectURL(url);
           {result&&result.hasLowStock&&<span className="tag tr pulse"><Ic.Alert/> Thiếu hàng</span>}
           {limitsWarnings.totalAlerts>0&&<span className="tag tr pulse"><Ic.Alert/> {limitsWarnings.totalAlerts} CB</span>}
           <button className="btn btn-success btn-sm" onClick={saveScenario}><Ic.Save/> Lưu</button>
-          {/* GitHub Cloud Storage buttons */}
-          <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title="Cấu hình kết nối GitHub" style={{padding:'4px 9px',fontSize:'.72rem'}}>⚙️ GitHub</button>
-          <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu PA hiện tại lên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
-            {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu cloud
-          </button>
-          <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải PA đã lưu trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
-            📂 Tải cloud
-          </button>
+          {/* Cấu hình GitHub chung — dùng cho mọi tính năng cloud (PA, Giá sàn, ...) */}
+          <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title="Cấu hình kết nối GitHub (chung cho mọi tính năng cloud)" style={{padding:'4px 9px',fontSize:'.72rem'}}>⚙️ GitHub</button>
           <button className="btn btn-solid btn-sm" onClick={()=>window.print()}><Ic.Print/> In A4</button>
         </div>
       </div>
@@ -2228,6 +2363,14 @@ URL.revokeObjectURL(url);
                     }))}
                     title="Đồng bộ Giá CIF từ GSheet">🔄 Đồng bộ CIF</button>
                   <button className="btn btn-ghost btn-sm" onClick={addProduct}><Ic.Plus/> Thêm SKU</button>
+                  {/* ─── Cloud PA ─── (chỉ thuộc tab PAKD Mua) */}
+                  <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
+                  <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu PA mua hiện tại lên GitHub':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                    {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu PA cloud
+                  </button>
+                  <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải danh sách PA đã lưu trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                    📂 Tải PA cloud
+                  </button>
                 </div>
               </div>
 
@@ -2907,7 +3050,15 @@ URL.revokeObjectURL(url);
                         <input className="inp inp-xs mono" style={{width:130,color:'#581c87',fontWeight:700,border:'1px solid #d8b4fe',background:'#faf5ff'}} placeholder={inputs.creator||'Nhập tên…'} value={pdfSignerName} onChange={e=>setPdfSignerName(e.target.value)}/>
                         <button className="btn btn-purple btn-xs" onClick={()=>exportFloorPDF(null,pdfSignerName||inputs.creator)}>📄 PDF</button>
                       </div>
-                      <button className="btn btn-success btn-sm" onClick={saveFloorHistory}><Ic.Save/> Lưu lịch sử</button>
+                      <button className="btn btn-success btn-sm" onClick={saveFloorHistory} title="Lưu lịch sử local + GSheet (workflow cũ)"><Ic.Save/> Lưu local</button>
+                      {/* ─── Cloud Sàn ─── */}
+                      <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
+                      <button className="btn btn-purple btn-sm" onClick={()=>submitFloorToGithub(mgmtData)} disabled={floorStatus.loading||!ghConfig.token} title={ghConfig.token?'Gửi Sàn tuần này lên GitHub để Giám đốc duyệt':'Cần cấu hình GitHub trước (⚙️ GitHub ở header)'} style={{fontSize:'.72rem'}}>
+                        {floorStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'📤'} Gửi GĐ duyệt
+                      </button>
+                      <button className="btn btn-teal btn-sm" onClick={listFloorSubmissions} disabled={floorStatus.loading||!ghConfig.token} title="Xem danh sách Sàn đã gửi (chờ duyệt + đã duyệt)" style={{fontSize:'.72rem'}}>
+                        📂 Sàn cloud
+                      </button>
                     </div>
                   </div>
                   <div style={{overflowX:'auto'}}>
@@ -3730,8 +3881,7 @@ URL.revokeObjectURL(url);
                 </div>
                 <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('fh')} disabled={dbStatus.loading}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync GSheet</button>
-                  <button className="btn btn-purple btn-sm" onClick={saveFloorHistoryToGithub} disabled={floorStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu Lịch sử Sàn lên GitHub (mỗi tháng 1 file)':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'}>{floorStatus.loading?<div className="spinner"/>:'☁️'} Lưu Sàn cloud</button>
-                  <button className="btn btn-teal btn-sm" onClick={listFloorMonths} disabled={floorStatus.loading||!ghConfig.token} title="Xem danh sách tháng đã lưu trên GitHub">📂 Xem Sàn cloud</button>
+                  <button className="btn btn-teal btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading||!ghConfig.token} title="Đọc lịch sử Sàn đã được Giám đốc duyệt từ GitHub">{floorStatus.loading?<div className="spinner"/>:'☁️'} Lịch sử Cloud</button>
                   <button className="btn btn-teal btn-sm" onClick={exportHistoryCSV}>⬇️ Xuất .xls</button>
                   <button className="btn" style={{background:'#fee2e2',border:'1px solid #fca5a5',color:'#b91c1c',padding:'4px 10px',fontSize:'.73rem',fontWeight:800}} onClick={()=>{if(window.confirm('Xóa toàn bộ lịch sử local?\\nKhông thể khôi phục.')) {setFloorHistory([]);try{localStorage.removeItem('pakd_floor_history');}catch(e){}}}}>🗑️ Xóa local</button>
                 </div>
@@ -4053,30 +4203,60 @@ URL.revokeObjectURL(url);
           </div>
         </div>
       )}
-
-      {/* MODAL: LIST PA */}
+      {/* MODAL: DANH SÁCH PA TỪ GITHUB */}
       {ghStatus.loadOpen&&(
         <div onClick={()=>setGhStatus(p=>({...p,loadOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:720,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📂 Danh sách PA ({ghStatus.plansList.length})</h3>
               <button onClick={()=>setGhStatus(p=>({...p,loadOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
             {ghStatus.plansList.length===0?(<div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có PA nào.</div>):(
               <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                {ghStatus.plansList.map((f,i)=>(
-                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#f8fafc',border:'1px solid #cbd5e1',borderRadius:6,padding:'8px 12px',gap:8}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div className="mono" style={{fontSize:'.78rem',fontWeight:800,color:'#1d4ed8'}}>{f.name}</div>
-                      <div style={{fontSize:'.62rem',color:'#64748b',marginTop:1}}>Size: {(f.size/1024).toFixed(1)} KB</div>
+                <div style={{display:'flex',gap:4,marginBottom:6,padding:4,background:'#f1f5f9',borderRadius:6}}>
+                  {(()=>{
+                    const cur=ghStatus.filterStatus||'all';
+                    const counts={
+                      all:ghStatus.plansList.length,
+                      pending:ghStatus.plansList.filter(f=>f._status==='pending').length,
+                      approved:ghStatus.plansList.filter(f=>f._status==='approved').length,
+                      rejected:ghStatus.plansList.filter(f=>f._status==='rejected').length,
+                    };
+                    return[
+                      {k:'all',l:`Tất cả (${counts.all})`,c:'#475569'},
+                      {k:'pending',l:`⏳ Chờ (${counts.pending})`,c:'#854d0e'},
+                      {k:'approved',l:`✓ Duyệt (${counts.approved})`,c:'#14532d'},
+                      {k:'rejected',l:`✗ Từ chối (${counts.rejected})`,c:'#991b1b'},
+                    ].map(t=>(<button key={t.k} onClick={()=>setGhStatus(p=>({...p,filterStatus:t.k}))} style={{flex:1,padding:'5px 8px',fontSize:'.7rem',fontWeight:800,border:'none',borderRadius:4,cursor:'pointer',background:cur===t.k?'#2563eb':'transparent',color:cur===t.k?'#fff':t.c}}>{t.l}</button>));
+                  })()}
+                </div>
+                {ghStatus.plansList.filter(f=>{const fs=ghStatus.filterStatus||'all';return fs==='all'||f._status===fs;}).map((f,i)=>{
+                  const st=f._status||'pending';
+                  const badge=st==='approved'?{bg:'#dcfce7',br:'#86efac',c:'#14532d',t:'✓ ĐÃ DUYỆT'}:st==='rejected'?{bg:'#fee2e2',br:'#fca5a5',c:'#991b1b',t:'✗ TỪ CHỐI'}:st==='error'?{bg:'#f1f5f9',br:'#cbd5e1',c:'#475569',t:'⚠ Lỗi'}:{bg:'#fef3c7',br:'#fcd34d',c:'#854d0e',t:'⏳ CHỜ DUYỆT'};
+                  return(
+                    <div key={i} style={{background:'#fff',border:`2px solid ${badge.br}`,borderRadius:7,padding:'10px 13px'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                            <span className="mono" style={{fontSize:'.76rem',fontWeight:800,color:'#1d4ed8'}}>{f.name}</span>
+                            <span style={{fontSize:'.6rem',fontWeight:900,background:badge.bg,color:badge.c,border:`1px solid ${badge.br}`,borderRadius:3,padding:'1px 6px'}}>{badge.t}</span>
+                          </div>
+                          <div style={{fontSize:'.66rem',color:'#0f172a',marginTop:3,fontWeight:700}}>
+                            👤 Gửi: <span style={{color:'#1d4ed8'}}>{f._requestedBy}</span>
+                            {f._totalVND>0&&<span style={{marginLeft:10,color:'#475569',fontWeight:600}}>💰 {fv(f._totalVND/1e6)}tr · 📦 {fv(f._totalKg)}kg</span>}
+                          </div>
+                          {f._requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {f._requestNote}</div>}
+                          {st==='approved'&&f._approvedBy&&<div style={{fontSize:'.62rem',color:'#14532d',marginTop:2,fontWeight:600}}>✓ Duyệt: <strong>{f._approvedBy}</strong></div>}
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
+                          <button className="btn btn-purple btn-xs" onClick={()=>loadPAFromGithub(f)} disabled={ghStatus.loading} style={{fontSize:'.65rem'}}>⬇ Tải</button>
+                          {st!=='approved'&&<button className="btn btn-success btn-xs" onClick={()=>reviewPA(f,'approved')} disabled={ghStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
+                          {st!=='rejected'&&<button onClick={()=>reviewPA(f,'rejected')} disabled={ghStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
+                        </div>
+                      </div>
                     </div>
-                    <div style={{display:'flex',gap:4,flexShrink:0}}>
-                      <button className="btn btn-purple btn-xs" onClick={()=>loadPAFromGithub(f)} disabled={ghStatus.loading} style={{fontSize:'.65rem'}}>⬇ Tải</button>
-                      <button className="btn btn-success btn-xs" onClick={()=>reviewPA(f,'approved')} disabled={ghStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>
-                      <button onClick={()=>reviewPA(f,'rejected')} disabled={ghStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
@@ -4087,49 +4267,90 @@ URL.revokeObjectURL(url);
         </div>
       )}
 
-      {/* MODAL: FLOOR HISTORY */}
+      {/* MODAL: SÀN PENDING / APPROVED */}
       {floorStatus.viewOpen&&(
         <div onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:780,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
-              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📂 Lịch sử Sàn ({floorStatus.monthsList.length} tháng)</h3>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📂 Quản lý Sàn Cloud — Phê duyệt theo tuần</h3>
               <button onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'200px 1fr',gap:12}}>
-              <div style={{display:'flex',flexDirection:'column',gap:5,borderRight:'1px solid #e2e8f0',paddingRight:10,maxHeight:'60vh',overflowY:'auto'}}>
-                {floorStatus.monthsList.length===0
-                  ?<div style={{fontSize:'.7rem',color:'#94a3b8',fontWeight:600,padding:8,textAlign:'center'}}>Chưa có tháng nào.</div>
-                  :floorStatus.monthsList.map((f,i)=>(<button key={i} onClick={()=>loadFloorMonth(f)} disabled={floorStatus.loading} style={{textAlign:'left',padding:'7px 10px',border:'1px solid '+(floorStatus.selectedMonth===f.name?'#2563eb':'#cbd5e1'),background:floorStatus.selectedMonth===f.name?'#dbeafe':'#f8fafc',borderRadius:5,cursor:'pointer',fontSize:'.74rem',fontWeight:700,color:floorStatus.selectedMonth===f.name?'#1e3a8a':'#334155'}}>🗓 {f.name.replace('.json','')}</button>))
-                }
-              </div>
-              <div>
-                {!floorStatus.monthData?(<div style={{textAlign:'center',padding:40,color:'#94a3b8',fontWeight:600,fontSize:'.78rem'}}>← Chọn 1 tháng bên trái để xem chi tiết</div>):(
-                  <div>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,padding:'8px 10px',background:floorStatus.monthData.status==='approved'?'#dcfce7':floorStatus.monthData.status==='rejected'?'#fee2e2':'#fef3c7',border:'1px solid '+(floorStatus.monthData.status==='approved'?'#86efac':floorStatus.monthData.status==='rejected'?'#fca5a5':'#fde047'),borderRadius:6}}>
-                      <div>
-                        <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a'}}>🗓 {floorStatus.monthData.month} — {floorStatus.monthData.entriesCount||0} bản BH</div>
-                        <div style={{fontSize:'.65rem',color:'#475569',fontWeight:600,marginTop:2}}>Lưu bởi: <strong>{floorStatus.monthData.savedBy}</strong>{floorStatus.monthData.status==='approved'&&<><br/>✓ Duyệt bởi: <strong>{floorStatus.monthData.approvedBy}</strong></>}{floorStatus.monthData.status==='rejected'&&<><br/>✗ Từ chối bởi: <strong>{floorStatus.monthData.approvedBy}</strong></>}</div>
-                      </div>
-                      <div style={{display:'flex',gap:5}}>
-                        {floorStatus.monthData.status!=='approved'&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorMonth({name:floorStatus.selectedMonth},'approved')} disabled={floorStatus.loading} style={{fontSize:'.68rem'}}>✓ Duyệt</button>}
-                        {floorStatus.monthData.status!=='rejected'&&<button onClick={()=>reviewFloorMonth({name:floorStatus.selectedMonth},'rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Từ chối</button>}
+            <div style={{display:'flex',gap:4,marginBottom:12,padding:4,background:'#f1f5f9',borderRadius:6}}>
+              <button onClick={()=>setFloorStatus(p=>({...p,activeTab:'pending'}))} style={{flex:1,padding:'6px 10px',fontSize:'.74rem',fontWeight:800,border:'none',borderRadius:4,cursor:'pointer',background:floorStatus.activeTab==='pending'?'#facc15':'transparent',color:floorStatus.activeTab==='pending'?'#0f172a':'#854d0e'}}>⏳ Chờ duyệt ({floorStatus.pendingList.length})</button>
+              <button onClick={()=>setFloorStatus(p=>({...p,activeTab:'approved'}))} style={{flex:1,padding:'6px 10px',fontSize:'.74rem',fontWeight:800,border:'none',borderRadius:4,cursor:'pointer',background:floorStatus.activeTab==='approved'?'#16a34a':'transparent',color:floorStatus.activeTab==='approved'?'#fff':'#14532d'}}>✓ Đã duyệt ({floorStatus.approvedList.length})</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'55vh',overflowY:'auto'}}>
+              {(()=>{
+                const list=floorStatus.activeTab==='pending'?floorStatus.pendingList:floorStatus.approvedList;
+                if(list.length===0) return <div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có file nào.</div>;
+                return list.map((f,i)=>{
+                  const d=f._data||{};
+                  const isPending=floorStatus.activeTab==='pending'&&d.status!=='rejected';
+                  const isRejected=d.status==='rejected';
+                  const isApproved=floorStatus.activeTab==='approved';
+                  const badge=isApproved?{bg:'#dcfce7',br:'#86efac',c:'#14532d',t:'✓ ĐÃ DUYỆT'}:isRejected?{bg:'#fee2e2',br:'#fca5a5',c:'#991b1b',t:'✗ TỪ CHỐI'}:{bg:'#fef3c7',br:'#fcd34d',c:'#854d0e',t:'⏳ CHỜ DUYỆT'};
+                  return(
+                    <div key={i} style={{background:'#fff',border:`2px solid ${badge.br}`,borderRadius:7,padding:'10px 13px'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                            <span style={{fontSize:'.86rem',fontWeight:900,color:'#1d4ed8'}}>🗓 {d.weekLabel||f.name.replace('.json','')}</span>
+                            <span style={{fontSize:'.6rem',fontWeight:900,background:badge.bg,color:badge.c,border:`1px solid ${badge.br}`,borderRadius:3,padding:'1px 6px'}}>{badge.t}</span>
+                          </div>
+                          <div style={{fontSize:'.66rem',color:'#0f172a',marginTop:3,fontWeight:700}}>
+                            👤 Gửi: <span style={{color:'#1d4ed8'}}>{d.requestedBy||d.savedBy||'?'}</span>
+                            <span style={{marginLeft:10,color:'#475569',fontWeight:600}}>📊 {d.groupsCount||0} nhóm</span>
+                          </div>
+                          {d.requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {d.requestNote}</div>}
+                          {d.approvedBy&&<div style={{fontSize:'.62rem',color:'#14532d',marginTop:2,fontWeight:600}}>✓ Duyệt: <strong>{d.approvedBy}</strong></div>}
+                        </div>
+                        <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
+                          {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
+                          {isPending&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
+                        </div>
                       </div>
                     </div>
-                    <div style={{maxHeight:'45vh',overflowY:'auto',border:'1px solid #e2e8f0',borderRadius:5}}>
-                      <table className="tbl" style={{fontSize:'.7rem'}}>
-                        <thead><tr><th style={{textAlign:'left'}}>Ngày BH</th><th style={{textAlign:'left'}}>Giờ</th><th style={{textAlign:'left'}}>Người lập</th><th style={{textAlign:'right'}}>Tỷ giá</th><th style={{textAlign:'right'}}>Nhóm</th></tr></thead>
-                        <tbody>
-                          {(floorStatus.monthData.entries||[]).map((e,i)=>(<tr key={i}><td style={{paddingLeft:8}}>{e.issuedDate}</td><td>{e.issuedTime}</td><td>{e.issuedBy}</td><td style={{textAlign:'right'}} className="mono">{e.exchangeRate?Number(e.exchangeRate).toLocaleString('vi-VN'):'—'}</td><td style={{textAlign:'right'}} className="mono">{(e.groups||[]).length}</td></tr>))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
+                  );
+                });
+              })()}
             </div>
             <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
-              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 ⏳ Chờ · ✓ Duyệt · ✗ Từ chối</span>
-              <button className="btn btn-ghost btn-sm" onClick={listFloorMonths} disabled={floorStatus.loading}>🔄 Refresh</button>
+              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Duyệt → /floor/approved/ + append history.json</span>
+              <button className="btn btn-ghost btn-sm" onClick={listFloorSubmissions} disabled={floorStatus.loading}>🔄 Refresh</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT */}
+      {floorStatus.historyOpen&&(
+        <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📚 Lịch sử Sàn đã duyệt ({floorStatus.history.length})</h3>
+              <button onClick={()=>setFloorStatus(p=>({...p,historyOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+            </div>
+            {floorStatus.history.length===0?(
+              <div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có Sàn nào được duyệt.</div>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'62vh',overflowY:'auto'}}>
+                {floorStatus.history.map((h,i)=>(
+                  <div key={i} style={{background:'#f0fdf4',border:'2px solid #86efac',borderRadius:7,padding:'10px 13px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:5}}>
+                      <span style={{fontSize:'.86rem',fontWeight:900,color:'#14532d'}}>🗓 {h.weekLabel}</span>
+                      <span style={{fontSize:'.62rem',color:'#15803d',fontWeight:700}}>{h.approvedAt?new Date(h.approvedAt).toLocaleString('vi-VN'):''}</span>
+                    </div>
+                    <div style={{fontSize:'.66rem',color:'#0f172a'}}>
+                      👤 Gửi: <strong>{h.requestedBy}</strong> · ✓ Duyệt: <strong>{h.approvedBy}</strong> · 📊 {h.groupsCount} nhóm
+                    </div>
+                    {h.requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {h.requestNote}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
+              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ /floor/history.json</span>
+              <button className="btn btn-ghost btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading}>🔄 Refresh</button>
             </div>
           </div>
         </div>
