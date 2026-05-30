@@ -1127,6 +1127,9 @@ const App=()=>{
   const [ghVerifying,setGhVerifying]=useState(false);
   const [ghUser,setGhUser]=useState(null); // {login, name}
   const [ghBlockedScreen,setGhBlockedScreen]=useState(true); // hiển thị màn login lần đầu
+  // Ref để các useCallback luôn đọc giá trị mới nhất (tránh stale closure)
+  const ghVerifiedRef=useRef(false);
+  useEffect(()=>{ghVerifiedRef.current=ghVerified;},[ghVerified]);
   // Verify token bằng cách gọi GitHub API /user
   const verifyGithubToken=useCallback(async(silent=false)=>{
     if(!ghConfig.owner||!ghConfig.token||!ghConfig.repo){
@@ -1660,8 +1663,8 @@ const App=()=>{
   const maxStockMap=useMemo(()=>{const m={};minStockRows.forEach(r=>{const v=r.maxStockKg;m[skuKey(r)]=(v===null||v===undefined||v==='')?null:(parseFloat(v)||null);});return m;},[minStockRows]);
 
   const syncGoogleSheet=useCallback(async(which='all')=>{
-    // 🔐 BẢO MẬT: Chặn sync GSheet nếu chưa verify GitHub
-    if(!ghVerified){
+    // 🔐 BẢO MẬT: Chặn sync GSheet nếu chưa verify GitHub (đọc qua ref để không stale)
+    if(!ghVerifiedRef.current){
       alert('🔐 BẢO MẬT: Bạn cần xác thực GitHub trước khi đồng bộ dữ liệu.\n\nNhấn ⚙️ GitHub ở góc phải header để cấu hình + xác thực token.');
       return;
     }
