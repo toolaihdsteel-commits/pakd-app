@@ -1609,14 +1609,33 @@ const App=()=>{
     }
   },[ghAPI]);
 
-  // Tải history.json về xem ở tab Lịch sử
+  // Tải history.json về xem ở tab Lịch sử + ĐỔ VÀO floorHistory state để bảng chi tiết hiển thị
   const loadFloorHistoryFromGithub=useCallback(async()=>{
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
       const d=await ghAPI('GET','contents/floor/history.json');
       const content=decodeURIComponent(escape(atob(d.content.replace(/\n/g,''))));
       const arr=JSON.parse(content);
-      setFloorStatus(p=>({...p,loading:false,history:Array.isArray(arr)?arr:[],historyOpen:true}));
+      const safeArr=Array.isArray(arr)?arr:[];
+      // Map history entry → format floorHistory cũ (issuedDate, issuedTime, issuedBy, groups, ...)
+      const mapped=safeArr.map(h=>{
+        const dt=h.approvedAt?new Date(h.approvedAt):null;
+        return{
+          id:h.weekLabel+'_'+(h.approvedAt||''),
+          weekLabel:h.weekLabel,
+          issuedDate:dt?dt.toLocaleDateString('vi-VN'):'',
+          issuedTime:dt?dt.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}):'',
+          issuedISO:h.approvedAt,
+          issuedBy:h.requestedBy||'?',
+          approvedBy:h.approvedBy||'?',
+          requestNote:h.requestNote||'',
+          exchangeRate:h.exchangeRate||0,
+          groups:h.groups||[],
+        };
+      });
+      setFloorHistory(mapped);
+      try{localStorage.setItem('pakd_floor_history',JSON.stringify(mapped));}catch(e){}
+      setFloorStatus(p=>({...p,loading:false,history:safeArr,historyOpen:true,lastAction:`✓ Đã tải ${safeArr.length} bản từ history.json`}));
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message,history:[],historyOpen:true}));
     }
@@ -4406,34 +4425,88 @@ URL.revokeObjectURL(url);
         </div>
       )}
 
-      {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT */}
+            {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT (có expand chi tiết) */}
       {floorStatus.historyOpen&&(
-        <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:1100,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
-              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📚 Lịch sử Sàn đã duyệt ({floorStatus.history.length})</h3>
-              <button onClick={()=>setFloorStatus(p=>({...p,historyOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📚 Lịch sử Sàn đã duyệt ({floorStatus.history.length}) — Click để xem chi tiết</h3>
+              <button onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
             {floorStatus.history.length===0?(
               <div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có Sàn nào được duyệt.</div>
             ):(
-              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'62vh',overflowY:'auto'}}>
-                {floorStatus.history.map((h,i)=>(
-                  <div key={i} style={{background:'#f0fdf4',border:'2px solid #86efac',borderRadius:7,padding:'10px 13px'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:5}}>
-                      <span style={{fontSize:'.86rem',fontWeight:900,color:'#14532d'}}>🗓 {h.weekLabel}</span>
-                      <span style={{fontSize:'.62rem',color:'#15803d',fontWeight:700}}>{h.approvedAt?new Date(h.approvedAt).toLocaleString('vi-VN'):''}</span>
+              <div style={{display:'flex',flexDirection:'column',gap:6,maxHeight:'70vh',overflowY:'auto'}}>
+                {floorStatus.history.map((h,i)=>{
+                  const isExpanded=floorStatus.expandedIdx===i;
+                  return(
+                  <div key={i} style={{background:isExpanded?'#fff':'#f0fdf4',border:`2px solid ${isExpanded?'#16a34a':'#86efac'}`,borderRadius:7,overflow:'hidden'}}>
+                    <div onClick={()=>setFloorStatus(p=>({...p,expandedIdx:isExpanded?null:i}))} style={{padding:'10px 13px',cursor:'pointer',background:isExpanded?'#dcfce7':'transparent'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5,flexWrap:'wrap',gap:5}}>
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <span style={{fontSize:'1rem',color:'#14532d'}}>{isExpanded?'▼':'▶'}</span>
+                          <span style={{fontSize:'.92rem',fontWeight:900,color:'#14532d'}}>🗓 {h.weekLabel}</span>
+                          <span style={{fontSize:'.6rem',fontWeight:900,background:'#dcfce7',color:'#14532d',border:'1px solid #86efac',borderRadius:3,padding:'1px 6px'}}>✓ ĐÃ DUYỆT</span>
+                        </div>
+                        <span style={{fontSize:'.65rem',color:'#15803d',fontWeight:700}}>{h.approvedAt?new Date(h.approvedAt).toLocaleString('vi-VN'):''}</span>
+                      </div>
+                      <div style={{fontSize:'.7rem',color:'#0f172a',marginLeft:24}}>
+                        👤 Gửi: <strong>{h.requestedBy}</strong> · ✓ Duyệt: <strong>{h.approvedBy}</strong> · 📊 <strong>{h.groupsCount||(h.groups||[]).length}</strong> nhóm · 💱 Tỷ giá: <strong>{h.exchangeRate?Number(h.exchangeRate).toLocaleString('vi-VN'):'?'}</strong>
+                      </div>
+                      {h.requestNote&&<div style={{fontSize:'.66rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:4,fontStyle:'italic',marginLeft:24}}>📝 {h.requestNote}</div>}
                     </div>
-                    <div style={{fontSize:'.66rem',color:'#0f172a'}}>
-                      👤 Gửi: <strong>{h.requestedBy}</strong> · ✓ Duyệt: <strong>{h.approvedBy}</strong> · 📊 {h.groupsCount} nhóm
-                    </div>
-                    {h.requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {h.requestNote}</div>}
+                    {isExpanded&&(
+                      <div style={{padding:'8px 13px 13px',background:'#fff',borderTop:'1px dashed #86efac'}}>
+                        <div style={{fontSize:'.72rem',fontWeight:800,color:'#14532d',marginBottom:6}}>📊 Chi tiết {(h.groups||[]).length} nhóm:</div>
+                        <div style={{overflowX:'auto'}}>
+                          <table className="tbl" style={{fontSize:'.7rem'}}>
+                            <thead>
+                              <tr>
+                                <th style={{textAlign:'left'}}>Nhóm</th>
+                                <th style={{textAlign:'right'}}>Mác</th>
+                                <th style={{textAlign:'right'}}>Dày</th>
+                                <th style={{textAlign:'right'}}>SKU</th>
+                                <th style={{textAlign:'right'}}>Tồn (kg)</th>
+                                <th style={{textAlign:'right',background:'#fefce8'}}>BQ GV</th>
+                                <th style={{textAlign:'right',background:'#fef3c7'}}>Sàn TĐ</th>
+                                <th style={{textAlign:'right',background:'#fde047',color:'#713f12'}}>Sàn BH</th>
+                                <th style={{textAlign:'right',background:'#dbeafe'}}>Cốt lõi</th>
+                                <th style={{textAlign:'right',background:'#e9d5ff'}}>Thân thiết</th>
+                                <th style={{textAlign:'right',background:'#fed7aa'}}>KH lẻ</th>
+                                <th style={{textAlign:'right'}}>BQ ĐT</th>
+                                <th style={{textAlign:'right'}}>Sàn ĐT</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(h.groups||[]).map((g,gi)=>(
+                                <tr key={gi}>
+                                  <td style={{paddingLeft:6,fontWeight:700,color:'#0f172a'}}>{g.label}</td>
+                                  <td style={{textAlign:'right'}}>{g.alloy} {g.temper}</td>
+                                  <td style={{textAlign:'right'}} className="mono">{g.minThick}-{g.maxThick}</td>
+                                  <td style={{textAlign:'right'}} className="mono">{g.skus||0}</td>
+                                  <td style={{textAlign:'right'}} className="mono">{g.totalQty?fv(g.totalQty):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#fefce8'}} className="mono">{g.avgCost?fv(g.avgCost):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#fef3c7'}} className="mono">{g.autoFloor?fv(g.autoFloor):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#fef9c3',fontWeight:900,color:'#713f12'}} className="mono">{g.publishedFloor?fv(g.publishedFloor):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#eff6ff',color:'#1d4ed8'}} className="mono">{g.corePrice?fv(g.corePrice):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#faf5ff',color:'#7c3aed'}} className="mono">{g.loyalPrice?fv(g.loyalPrice):'—'}</td>
+                                  <td style={{textAlign:'right',background:'#fff7ed',color:'#ea580c'}} className="mono">{g.newPrice?fv(g.newPrice):'—'}</td>
+                                  <td style={{textAlign:'right',color:'#64748b'}} className="mono">{g.avgCompPrice?fv(g.avgCompPrice):'—'}</td>
+                                  <td style={{textAlign:'right',color:'#64748b'}} className="mono">{g.avgCompFloor?fv(g.avgCompFloor):'—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
-              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ /floor/history.json</span>
+              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ <code>/floor/history.json</code>. Data đã đồng bộ vào tab Lịch sử Sàn bên dưới.</span>
               <button className="btn btn-ghost btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading}>🔄 Refresh</button>
             </div>
           </div>
