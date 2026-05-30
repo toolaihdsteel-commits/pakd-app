@@ -2368,7 +2368,9 @@ URL.revokeObjectURL(url);
           {limitsWarnings.totalAlerts>0&&<span className="tag tr pulse"><Ic.Alert/> {limitsWarnings.totalAlerts} CB</span>}
           <button className="btn btn-success btn-sm" onClick={saveScenario}><Ic.Save/> Lưu</button>
           {/* Cấu hình GitHub chung — dùng cho mọi tính năng cloud (PA, Giá sàn, ...) */}
-          <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title="Cấu hình kết nối GitHub (chung cho mọi tính năng cloud)" style={{padding:'4px 9px',fontSize:'.72rem'}}>⚙️ GitHub</button>
+          <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title={ghVerified?`✓ GitHub: ${ghUser?.login||'?'} — Click để chỉnh cấu hình`:'Cấu hình kết nối GitHub'} style={{padding:'4px 9px',fontSize:'.72rem',background:ghVerified?'#dcfce7':'#fee2e2',border:`1px solid ${ghVerified?'#86efac':'#fca5a5'}`,color:ghVerified?'#14532d':'#991b1b'}}>
+            {ghVerified?`✓ GitHub: ${ghUser?.login||'?'}`:'⚠️ Chưa xác thực GitHub'}
+          </button>
           <button className="btn btn-solid btn-sm" onClick={()=>window.print()}><Ic.Print/> In A4</button>
         </div>
       </div>
@@ -4265,7 +4267,12 @@ URL.revokeObjectURL(url);
               <div><label className="lbl">Branch</label><input type="text" className="inp" placeholder="main" value={ghConfig.branch||'main'} onChange={e=>setGhConfig(p=>({...p,branch:e.target.value.trim()||'main'}))}/></div>
               <div style={{display:'flex',gap:8,marginTop:6,justifyContent:'flex-end'}}>
                 <button className="btn btn-ghost btn-sm" onClick={()=>{setGhConfig({owner:'',repo:'pakd-data',token:'',branch:'main'});try{localStorage.removeItem('pakd_gh_config');}catch(e){}}}>🗑 Xóa</button>
-                <button className="btn btn-success btn-sm" onClick={()=>{saveGhConfig(ghConfig);setGhStatus(p=>({...p,configOpen:false}));alert('✓ Đã lưu cấu hình GitHub.');}}>💾 Lưu</button>
+                <button className="btn btn-success btn-sm" disabled={ghVerifying} onClick={async()=>{
+                  saveGhConfig(ghConfig);
+                  // Tự verify ngay sau khi lưu để mở khóa Sync GSheet
+                  const ok=await verifyGithubToken(false);
+                  if(ok){setGhStatus(p=>({...p,configOpen:false}));}
+                }}>{ghVerifying?'⏳ Đang xác thực...':'💾 Lưu & Xác thực'}</button>
               </div>
               {/* PIN setup section */}
               <div style={{marginTop:14,paddingTop:14,borderTop:'2px dashed #cbd5e1'}}>
@@ -4424,8 +4431,7 @@ URL.revokeObjectURL(url);
           </div>
         </div>
       )}
-
-            {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT (có expand chi tiết) */}
+      {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT (có expand chi tiết) */}
       {floorStatus.historyOpen&&(
         <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
           <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:1100,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
@@ -4506,7 +4512,7 @@ URL.revokeObjectURL(url);
               </div>
             )}
             <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
-              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ <code>/floor/history.json</code>. Data đã đồng bộ vào tab Lịch sử Sàn bên dưới.</span>
+              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ /floor/history.json — Data đã sync vào tab Lịch sử Sàn.</span>
               <button className="btn btn-ghost btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading}>🔄 Refresh</button>
             </div>
           </div>
