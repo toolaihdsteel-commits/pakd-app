@@ -812,7 +812,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
           <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:2}}>So sánh PA mua với Kế hoạch dòng tiền (GSheet tab CashFlow · gid=127496102)</p>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('cf')} disabled={dbStatus.loading}>
+          <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('cf')} disabled={dbStatus.loading||!ghVerified}>
             {dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync CF
           </button>
           {cashFlowData.length===0
@@ -1122,6 +1122,48 @@ const App=()=>{
     catch(e){return {owner:'',repo:'pakd-data',token:'',branch:'main'};}
   });
   const [ghStatus,setGhStatus]=useState({loading:false,error:null,lastAction:null,configOpen:false,plansList:[],loadOpen:false});
+  // Trạng thái xác thực GitHub — gate cho cả app
+  const [ghVerified,setGhVerified]=useState(false);
+  const [ghVerifying,setGhVerifying]=useState(false);
+  const [ghUser,setGhUser]=useState(null); // {login, name}
+  const [ghBlockedScreen,setGhBlockedScreen]=useState(true); // hiển thị màn login lần đầu
+  // Verify token bằng cách gọi GitHub API /user
+  const verifyGithubToken=useCallback(async(silent=false)=>{
+    if(!ghConfig.owner||!ghConfig.token||!ghConfig.repo){
+      if(!silent) alert('⚠ Chưa nhập đủ thông tin GitHub (Username, Repo, Token)');
+      setGhVerified(false);
+      return false;
+    }
+    setGhVerifying(true);
+    try{
+      // Gọi /user để verify token + lấy thông tin user
+      const r1=await fetch('https://api.github.com/user',{headers:{'Authorization':`Bearer ${ghConfig.token}`,'Accept':'application/vnd.github+json'}});
+      if(!r1.ok) throw new Error(`Token không hợp lệ (HTTP ${r1.status})`);
+      const userInfo=await r1.json();
+      // Verify access vào repo
+      const r2=await fetch(`https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}`,{headers:{'Authorization':`Bearer ${ghConfig.token}`,'Accept':'application/vnd.github+json'}});
+      if(!r2.ok) throw new Error(`Không có quyền truy cập repo ${ghConfig.owner}/${ghConfig.repo} (HTTP ${r2.status})`);
+      setGhUser({login:userInfo.login,name:userInfo.name||userInfo.login,avatar:userInfo.avatar_url});
+      setGhVerified(true);
+      setGhBlockedScreen(false);
+      setGhVerifying(false);
+      if(!silent) alert(`✓ Xác thực GitHub thành công!\nUser: ${userInfo.login}\nRepo: ${ghConfig.owner}/${ghConfig.repo}`);
+      return true;
+    }catch(e){
+      setGhVerified(false);
+      setGhUser(null);
+      setGhVerifying(false);
+      if(!silent) alert(`❌ Lỗi xác thực GitHub:\n${e.message}\n\nKiểm tra lại:\n- Username + Repo có đúng?\n- Token có quyền truy cập repo này?\n- Token còn hạn?`);
+      return false;
+    }
+  },[ghConfig]);
+  // Tự verify khi mở app (nếu đã có config)
+  useEffect(()=>{
+    if(ghConfig.token&&ghConfig.owner&&ghConfig.repo){
+      verifyGithubToken(true);
+    }
+    // eslint-disable-next-line
+  },[]);
   const saveGhConfig=useCallback((cfg)=>{
     setGhConfig(cfg);
     try{localStorage.setItem('pakd_gh_config',JSON.stringify(cfg));}catch(e){}
@@ -1599,6 +1641,11 @@ const App=()=>{
   const maxStockMap=useMemo(()=>{const m={};minStockRows.forEach(r=>{const v=r.maxStockKg;m[skuKey(r)]=(v===null||v===undefined||v==='')?null:(parseFloat(v)||null);});return m;},[minStockRows]);
 
   const syncGoogleSheet=useCallback(async(which='all')=>{
+    // 🔐 BẢO MẬT: Chặn sync GSheet nếu chưa verify GitHub
+    if(!ghVerified){
+      alert('🔐 BẢO MẬT: Bạn cần xác thực GitHub trước khi đồng bộ dữ liệu.\n\nNhấn ⚙️ GitHub ở góc phải header để cấu hình + xác thực token.');
+      return;
+    }
     setDbStatus(p=>({...p,loading:true,error:null}));
     try{
       const toFetch=[];
@@ -2222,6 +2269,46 @@ URL.revokeObjectURL(url);
       <datalist id="width-list">{WIDTHS.map(a=><option key={a} value={a}/>)}</datalist>
       <datalist id="length-list">{LENGTHS.map(a=><option key={a} value={a}/>)}</datalist>
 
+      {/* ═══════════════ 🔐 LOGIN GATE — Chặn app nếu chưa xác thực GitHub ═══════════════ */}
+      {ghBlockedScreen&&!ghVerified&&(
+        <div style={{position:'fixed',inset:0,background:'linear-gradient(135deg,#0f172a 0%,#1e293b 100%)',zIndex:99999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',color:'#fff'}}>
+          <div style={{background:'#fff',color:'#0f172a',borderRadius:14,padding:'34px 38px',maxWidth:520,width:'100%',boxShadow:'0 30px 80px rgba(0,0,0,0.5)'}}>
+            <div style={{textAlign:'center',marginBottom:20}}>
+              <div style={{fontSize:'3rem',marginBottom:8}}>🔐</div>
+              <h2 style={{fontWeight:900,fontSize:'1.3rem',color:'#0f172a',marginBottom:6}}>Xác thực GitHub bắt buộc</h2>
+              <p style={{fontSize:'.84rem',color:'#475569',fontWeight:600,lineHeight:1.5}}>
+                Để bảo vệ dữ liệu kinh doanh, app PAKD yêu cầu xác thực GitHub trước khi truy cập.<br/>
+                <span style={{color:'#dc2626',fontWeight:700}}>Người không có Personal Access Token sẽ không thể xem dữ liệu.</span>
+              </p>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:12,marginBottom:14}}>
+              <div>
+                <label className="lbl">GitHub Username (chủ repo)</label>
+                <input type="text" className="inp" placeholder="vd: toolaihdsteel-commits" value={ghConfig.owner} onChange={e=>setGhConfig(p=>({...p,owner:e.target.value.trim()}))}/>
+              </div>
+              <div>
+                <label className="lbl">Tên Repo</label>
+                <input type="text" className="inp" placeholder="pakd-data" value={ghConfig.repo} onChange={e=>setGhConfig(p=>({...p,repo:e.target.value.trim()}))}/>
+              </div>
+              <div>
+                <label className="lbl">Personal Access Token</label>
+                <input type="password" className="inp" placeholder="github_pat_..." value={ghConfig.token} onChange={e=>setGhConfig(p=>({...p,token:e.target.value.trim()}))} style={{fontFamily:'JetBrains Mono',fontSize:'.78rem'}}/>
+              </div>
+            </div>
+            <button className="btn btn-solid" disabled={ghVerifying||!ghConfig.token||!ghConfig.owner} onClick={async()=>{
+              const ok=await verifyGithubToken(false);
+              if(ok){saveGhConfig(ghConfig);}
+            }} style={{width:'100%',padding:'12px',fontSize:'.92rem',fontWeight:900,justifyContent:'center'}}>
+              {ghVerifying?'⏳ Đang xác thực...':'🔓 Xác thực & vào app'}
+            </button>
+            <div style={{marginTop:14,fontSize:'.68rem',color:'#64748b',background:'#f1f5f9',border:'1px solid #cbd5e1',borderRadius:6,padding:'9px 12px',lineHeight:1.6}}>
+              💡 <strong>Chưa có token?</strong> Liên hệ chủ app (anh Huy) để được cấp.<br/>
+              🔒 Token chỉ lưu trên máy này (localStorage), không gửi đi đâu khác ngoài GitHub.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ═══ HEADER ═══ */}
       <div className="screen-container" style={{background:bg2,borderBottom:`1px solid ${border1}`,padding:'8px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
         <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
@@ -2254,7 +2341,7 @@ URL.revokeObjectURL(url);
               :dbStatus.error?<span style={{color:'#dc2626',fontWeight:700}}>⚠ Lỗi</span>
               :dbStatus.lastSync?<span style={{color:'#16a34a',fontWeight:700}}>✓ {dbStatus.lastSync}</span>
               :<span style={{color:'#475569',fontWeight:700}}>Local</span>}
-            <button onClick={()=>syncGoogleSheet('all')} disabled={dbStatus.loading} className="btn btn-ghost" style={{padding:'1px 6px',fontSize:'.65rem',gap:3,marginLeft:2}}><Ic.Refresh/> Sync All</button>
+            <button onClick={()=>syncGoogleSheet('all')} disabled={dbStatus.loading||!ghVerified} className="btn btn-ghost" style={{padding:'1px 6px',fontSize:'.65rem',gap:3,marginLeft:2}}><Ic.Refresh/> Sync All</button>
           </div>
           {result&&<span className={`tag ${result.rec.cls}`}>{result.rec.txt}</span>}
           {result&&<span className={`tag ${result.containerOk?'tg':result.totalContainer<24?'tr':'ty'}`}>📦 {result.totalContainer.toFixed(1)}T</span>}
@@ -2671,7 +2758,7 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📦 Tồn kho chi tiết theo SKU + Coating</h2>
                 <div style={{display:'flex',gap:8}}>
-                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('inv')} disabled={dbStatus.loading}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('inv')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
                   <button className="btn btn-ghost btn-sm" onClick={addInv}><Ic.Plus/> Thêm dòng</button>
                 </div>
               </div>
@@ -2766,7 +2853,7 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <div><h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📏 Min/Max Stock per SKU</h2><p style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginTop:3}}>Ô trống maxstockkg = không giới hạn (∞)</p></div>
                 <div style={{display:'flex',gap:8}}>
-                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('ms')} disabled={dbStatus.loading}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('ms')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
                   <button className="btn btn-ghost btn-sm" onClick={addMS}><Ic.Plus/> Thêm SKU</button>
                 </div>
               </div>
@@ -2845,7 +2932,7 @@ URL.revokeObjectURL(url);
                         );
                     })()}
                   </div>
-                  <button className="btn btn-teal btn-sm" onClick={()=>syncGoogleSheet('uip')} disabled={dbStatus.loading}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
+                  <button className="btn btn-teal btn-sm" onClick={()=>syncGoogleSheet('uip')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
 					{/* Chính sách Giá Sàn — inline compact */}
                   <div style={{display:'flex',gap:4,alignItems:'center',background:'#f0fdfa',border:'1px solid #99f6e4',borderRadius:5,padding:'4px 8px',flexWrap:'wrap'}}>
                     {[{f:'storageCostPct',l:'LK%',c:'#7c3aed',def:2},{f:'baseFinCostPct',l:'TC%',c:'#b45309',def:1.5},{f:'opsCostPct',l:'HĐKD%',c:'#b91c1c',def:4.5}].map(x=>(
@@ -3378,8 +3465,8 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
                 <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📈 Báo cáo Tồn kho & Doanh thu</h2>
                 <div style={{display:'flex',gap:8}}>
-                  <button className="btn btn-purple btn-sm" onClick={()=>syncGoogleSheet('lim')} disabled={dbStatus.loading}><Ic.Refresh/> Sync Hạn mức</button>
-                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('all')} disabled={dbStatus.loading}><Ic.Refresh/> Sync All</button>
+                  <button className="btn btn-purple btn-sm" onClick={()=>syncGoogleSheet('lim')} disabled={dbStatus.loading||!ghVerified}><Ic.Refresh/> Sync Hạn mức</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('all')} disabled={dbStatus.loading||!ghVerified}><Ic.Refresh/> Sync All</button>
                 </div>
               </div>
 
@@ -3876,23 +3963,20 @@ URL.revokeObjectURL(url);
             <div style={{maxWidth:'1200px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:15}}>
                 <div>
-                  <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>🗓️ Lịch sử ban hành Giá Sàn</h2>
-                  <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:3}}>{floorHistory.length} lần ban hành · localStorage + GSheet tab <em>Lịch sử Sàn</em></p>
+                  <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>🗓️ Lịch sử ban hành Giá Sàn (Cloud)</h2>
+                  <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:3}}>📚 Đọc trực tiếp từ <code>/floor/history.json</code> trên GitHub — chỉ hiển thị các Sàn đã được Giám đốc duyệt.</p>
                 </div>
                 <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('fh')} disabled={dbStatus.loading}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync GSheet</button>
-                  <button className="btn btn-teal btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading||!ghConfig.token} title="Đọc lịch sử Sàn đã được Giám đốc duyệt từ GitHub">{floorStatus.loading?<div className="spinner"/>:'☁️'} Lịch sử Cloud</button>
-                  <button className="btn btn-teal btn-sm" onClick={exportHistoryCSV}>⬇️ Xuất .xls</button>
-                  <button className="btn" style={{background:'#fee2e2',border:'1px solid #fca5a5',color:'#b91c1c',padding:'4px 10px',fontSize:'.73rem',fontWeight:800}} onClick={()=>{if(window.confirm('Xóa toàn bộ lịch sử local?\\nKhông thể khôi phục.')) {setFloorHistory([]);try{localStorage.removeItem('pakd_floor_history');}catch(e){}}}}>🗑️ Xóa local</button>
+                  <button className="btn btn-teal btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading||!ghVerified} title={ghVerified?'Tải lịch sử Sàn đã duyệt từ GitHub':'Cần xác thực GitHub trước (⚙️ GitHub)'}>{floorStatus.loading?<div className="spinner"/>:'☁️'} Tải lịch sử Cloud</button>
                 </div>
               </div>
 
-              {/* Hướng dẫn workflow GSheet */}
-              <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:7,padding:'9px 14px',marginBottom:13,fontSize:'.72rem',color:'#1e40af',lineHeight:1.8,fontWeight:600}}>
-                📋 <strong>Quy trình:</strong>
-                &nbsp;① Nhập Sàn ban hành → nhấn <strong>💾 Lưu lịch sử</strong> (lưu local) →
-                &nbsp;② Nhấn <strong>⬇️ Xuất .xls</strong> → mở file → copy toàn bộ dữ liệu (bỏ dòng tiêu đề) → paste vào GSheet tab <em>Lịch sử Sàn</em> (append cuối) →
-                &nbsp;③ Nhấn <strong>🔄 Sync GSheet</strong> để kéo dữ liệu từ GSheet về hiển thị tại đây.
+              {/* Hướng dẫn workflow mới (Cloud only) */}
+              <div style={{background:'#f0fdf4',border:'1px solid #86efac',borderRadius:7,padding:'9px 14px',marginBottom:13,fontSize:'.72rem',color:'#14532d',lineHeight:1.8,fontWeight:600}}>
+                📋 <strong>Quy trình mới (chỉ Cloud, không còn GSheet):</strong>
+                &nbsp;① Tab <strong>💹 Giá Sàn</strong> → nhập Sàn → nhấn <strong>📤 Gửi GĐ duyệt</strong> →
+                &nbsp;② Giám đốc vào Tab Giá Sàn → <strong>📂 Sàn cloud</strong> → ✓ Duyệt + PIN →
+                &nbsp;③ File tự append vào <code>/floor/history.json</code> → hiển thị ở tab này.
               </div>
 
               {/* Filter bar */}
