@@ -776,7 +776,7 @@ const CreditModeSelector=({inputs,setInp})=>{
 
 
 // ─── CASH FLOW TAB COMPONENT ─────────────────────────────────────────────
-const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,setCFManualWeek,limitsData,syncGoogleSheet,dbStatus,bg1,bg2,border1,border2})=>{
+const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,setCFManualWeek,limitsData,syncGoogleSheet,dbStatus,ghVerified,bg1,bg2,border1,border2})=>{
   const nhapNgoaiVal=result?(result.invoiceVND||0):0;
   const tongMuaVal=nhapNgoaiVal;
   const vatVal=result?(result.invoiceVND*0.1):0;
@@ -4213,7 +4213,7 @@ URL.revokeObjectURL(url);
           </div>
         )}
 
-        {tab==='cashflow'&&<CashFlowTab result={result} inputs={inputs} cashFlowData={cashFlowData} cfMode={cfMode} setCFMode={setCFMode} cfManualWeek={cfManualWeek} setCFManualWeek={setCFManualWeek} limitsData={limitsData} syncGoogleSheet={syncGoogleSheet} dbStatus={dbStatus} bg1={bg1} bg2={bg2} border1={border1} border2={border2}/>}
+        {tab==='cashflow'&&<CashFlowTab result={result} inputs={inputs} cashFlowData={cashFlowData} cfMode={cfMode} setCFMode={setCFMode} cfManualWeek={cfManualWeek} setCFManualWeek={setCFManualWeek} limitsData={limitsData} syncGoogleSheet={syncGoogleSheet} dbStatus={dbStatus} ghVerified={ghVerified} bg1={bg1} bg2={bg2} border1={border1} border2={border2}/>}
       </div>
 
       {result&&(
