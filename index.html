@@ -775,6 +775,58 @@ const CreditModeSelector=({inputs,setInp})=>{
 };
 
 
+// ─── BIỂU ĐỒ DÒNG TIỀN: 2 đường Thu/Chi, vùng tô giữa (xanh=dư, đỏ=hụt) ───
+const CashFlowChart=({cashFlowData,targetWeek})=>{
+  const ref=React.useRef(null);
+  const inst=React.useRef(null);
+  React.useEffect(()=>{
+    if(typeof Chart==='undefined'||!ref.current) return;
+    const rows=cashFlowData.filter(r=>r.week);
+    const labels=rows.map(r=>r.tuan.replace('Tuần','T'));
+    const thu=rows.map(r=>(r.tongThu||0)/1e9);
+    const chi=rows.map(r=>(r.tongChi||0)/1e9);
+    if(inst.current) inst.current.destroy();
+    try{
+      inst.current=new Chart(ref.current.getContext('2d'),{
+        type:'line',
+        data:{labels,datasets:[
+          // Đường CHI (đỏ) vẽ trước làm mốc fill
+          {label:'Tổng chi',data:chi,borderColor:'#dc2626',backgroundColor:'rgba(220,38,38,0.10)',
+           borderWidth:2,pointRadius:2,pointBackgroundColor:'#dc2626',tension:0.25,fill:false,order:2},
+          // Đường THU (xanh) fill xuống đường chi: xanh khi thu>chi, đỏ khi thu<chi
+          {label:'Tổng thu',data:thu,borderColor:'#16a34a',borderWidth:2,pointRadius:2,
+           pointBackgroundColor:'#16a34a',tension:0.25,order:1,
+           fill:{target:'-1',
+             above:'rgba(22,163,74,0.20)',   // thu > chi → dư dòng (xanh)
+             below:'rgba(220,38,38,0.22)'},  // thu < chi → hụt dòng (đỏ)
+          },
+        ]},
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          interaction:{mode:'index',intersect:false},
+          plugins:{
+            legend:{labels:{boxWidth:12,font:{size:11,weight:'700'}}},
+            tooltip:{callbacks:{
+              label:c=>c.dataset.label+': '+c.parsed.y.toFixed(2)+' tỷ',
+              afterbody:(items)=>{
+                const i=items[0].dataIndex;
+                const hm=(thu[i]-chi[i]);
+                return (hm>=0?'⚖️ Dư dòng: +':'⚠️ Hụt dòng: ')+hm.toFixed(2)+' tỷ';
+              }
+            }}
+          },
+          scales:{
+            y:{title:{display:true,text:'Tỷ VNĐ',font:{size:10}},ticks:{font:{size:10}}},
+            x:{ticks:{font:{size:9},maxRotation:90,minRotation:45}}
+          }
+        }
+      });
+    }catch(e){console.error('Lỗi vẽ biểu đồ dòng tiền:',e);}
+    return ()=>{if(inst.current){inst.current.destroy();inst.current=null;}};
+  },[cashFlowData,targetWeek]);
+  return <div style={{height:240}}><canvas ref={ref}></canvas></div>;
+};
+
 // ─── CASH FLOW TAB COMPONENT ─────────────────────────────────────────────
 const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,setCFManualWeek,limitsData,syncGoogleSheet,dbStatus,ghVerified,bg1,bg2,border1,border2})=>{
   const nhapNgoaiVal=result?(result.invoiceVND||0):0;
@@ -791,7 +843,9 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
   const planned_dtTM=cfRow?cfRow.dtTM||0:0;
   const planned_thuCN=cfRow?cfRow.thuCN||0:0;
   const planned_rong=cfRow?cfRow.rong||0:0;
-  const planned_balance=cfRow?cfRow.balance||0:0;  // số dư cân đối lũy kế cuối tuần
+  const planned_balance=cfRow?cfRow.hanMuc||0:0;  // TỔNG HẠN MỨC tuần đích (âm = hụt dòng)
+  const planned_hmHD=cfRow?cfRow.hmHD||0:0;
+  const planned_hmDD=cfRow?cfRow.hmDD||0:0;
   // Số dư SAU khi cộng thêm phương án mua hiện tại vào tuần đích
   const balanceAfterBuy=cfRow?(planned_balance-(tongMuaVal-planned_tong)):null;
   // Đáy năm (số dư thấp nhất) để cảnh báo
@@ -946,8 +1000,10 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
                     {l:'💵 Thu công nợ',kh:planned_thuCN,tt:null},
                     {l:'📈 Thu theo KH bán',kh:planned_dtTM,tt:null},
                     {l:'💰 Tổng thu KH',kh:planned_thu,tt:null,bold:true},
-                    {l:'➖ Dòng ròng tuần',kh:planned_rong,tt:null,isBalance:true},
-                    {l:'⚖️ Số dư cân đối cuối tuần',kh:planned_balance,tt:null,isBalance:true},
+                    {l:'➖ Dòng ròng tuần (Thu−Chi)',kh:planned_rong,tt:null,isBalance:true},
+                    {l:'   ↳ Hạn mức HD',kh:planned_hmHD,tt:null,isBalance:true},
+                    {l:'   ↳ Hạn mức ĐĐ',kh:planned_hmDD,tt:null,isBalance:true},
+                    {l:'⚖️ TỔNG HẠN MỨC (âm = hụt dòng)',kh:planned_balance,tt:null,isBalance:true,bold:true},
                   ].map((row,i)=>{
                     const delta=row.tt!=null?row.tt-(row.kh||0):null;
                     return(
@@ -987,6 +1043,15 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
             </div>
             )}
           </div>
+          {cashFlowData.length>0&&(
+          <div className="card">
+            <div className="sh">📈 Biểu đồ dòng tiền — Thu / Chi theo tuần</div>
+            <CashFlowChart cashFlowData={cashFlowData} targetWeek={targetWeek}/>
+            <div style={{fontSize:'.6rem',color:'#64748b',marginTop:4,lineHeight:1.5}}>
+              Vùng <span style={{color:'#16a34a',fontWeight:800}}>xanh</span> = thu vượt chi (dư dòng) · Vùng <span style={{color:'#dc2626',fontWeight:800}}>đỏ</span> = chi vượt thu (hụt dòng). Khoảng cách giữa 2 đường chính là mức dương/âm của Tổng hạn mức tuần đó.
+            </div>
+          </div>
+          )}
           <div className="card">
             <div className="sh">📊 Timeline dòng tiền</div>
             {cashFlowData.length===0?(
@@ -1000,29 +1065,27 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
                     <th style={{color:'#dc2626'}}>Tổng chi</th>
                     <th style={{color:'#16a34a'}}>Tổng thu</th>
                     <th style={{color:'#7c3aed'}}>Dòng ròng</th>
-                    <th>Số dư cân đối</th>
+                    <th>Tổng hạn mức</th>
                   </tr>
                 </thead>
                 <tbody>
                   {cashFlowData.map((r,i)=>{
                     const isCur=matchWeekLabel(r.tuan,targetWeek);
                     const showThang=i===0||r.thang!==cashFlowData[i-1].thang;
-                    const isDay=minBalance!=null&&r.balance!=null&&r.balance<=minBalance*1.05; // chạm đáy năm
-                    const isHut=r.rong!=null&&r.rong<0;                                          // hút dòng
+                    const isHut=r.hanMuc!=null&&r.hanMuc<0;                  // hạn mức âm = tuần hụt dòng
                     return(
-                      <tr key={i} style={{background:isCur?'#eff6ff':isDay?'#fef2f2':'',fontWeight:isCur?800:400}}>
+                      <tr key={i} style={{background:isCur?'#eff6ff':isHut?'#fef2f2':'',fontWeight:isCur?800:400}}>
                         <td style={{paddingLeft:6}}>
                           {showThang&&<div style={{fontSize:'.57rem',color:'#7c3aed',fontWeight:900,marginBottom:1}}>{r.thang}</div>}
                           {isCur&&<span style={{color:'#1d4ed8',marginRight:3}}>▶</span>}
                           <span style={{color:isCur?'#1d4ed8':'#334155'}}>{r.tuan}</span>
-                          {isDay&&<span title="Số dư chạm đáy năm" style={{marginLeft:3}}>🔴</span>}
-                          {isHut&&!isDay&&<span title="Tuần hút dòng (ròng âm)" style={{marginLeft:3}}>🟡</span>}
-                          {r.thieuThuNo&&<span title="Thu nợ chưa lập KH" style={{marginLeft:3}}>⚠️</span>}
+                          {isHut&&<span title="Tuần hụt dòng (hạn mức âm)" style={{marginLeft:3}}>🔴</span>}
+                          {r.thieuThuNo&&<span title="Thiếu KH doanh thu" style={{marginLeft:3}}>⚠️</span>}
                         </td>
                         <td style={{textAlign:'right',color:'#dc2626'}}>{fB(r.tongChi)}</td>
                         <td style={{textAlign:'right',color:'#16a34a'}}>{fB(r.tongThu)}</td>
                         <td style={{textAlign:'right',fontWeight:700,color:r.rong!=null&&r.rong<0?'#dc2626':'#16a34a'}}>{r.rong>=0?'+':''}{fB(r.rong)}</td>
-                        <td style={{textAlign:'right',fontWeight:800,color:r.balance!=null&&r.balance<0?'#dc2626':r.balance!=null&&r.balance<=3e9?'#f59e0b':'#16a34a'}}>{fB(r.balance)}</td>
+                        <td style={{textAlign:'right',fontWeight:800,color:r.hanMuc!=null&&r.hanMuc<0?'#dc2626':r.hanMuc!=null&&r.hanMuc<=2e9?'#f59e0b':'#16a34a'}}>{fB(r.hanMuc)}</td>
                       </tr>
                     );
                   })}
@@ -1041,10 +1104,10 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
           {cashFlowData.length===0&&<div>• ⚠ Chưa sync dữ liệu KH dòng tiền – nhấn <strong>Sync CF</strong> để tải từ GSheet</div>}
           {cfRow&&delta_nhapNgoai>0&&<div>• ⚠ Nhập ngoại vượt KH <strong>{fB(delta_nhapNgoai)}</strong> – cân nhắc dời sang tuần khác</div>}
           {cfRow&&delta_nhapNgoai<=0&&<div>• ✓ Nhập ngoại nằm trong KH (KH: {fB(planned_nhapNgoai)} · PA: {fB(nhapNgoaiVal)})</div>}
-          {cfRow&&<div>• ⚖️ Số dư cân đối {targetWeek}: <strong style={{color:planned_balance<0?'#dc2626':'#16a34a'}}>{fB(planned_balance)}</strong> {planned_rong<0&&<span style={{color:'#b45309'}}>(🟡 tuần hút dòng – ròng {fB(planned_rong)})</span>}</div>}
-          {cfRow&&balanceAfterBuy!=null&&<div>• 🛒 Nếu lấy cont này vào {targetWeek}, số dư còn <strong style={{color:balanceAfterBuy<0?'#dc2626':balanceAfterBuy<3e9?'#f59e0b':'#16a34a'}}>{fB(balanceAfterBuy)}</strong>{balanceAfterBuy<0?' – 🔴 VỠ KẾ HOẠCH, cần đẩy thu hồi công nợ/bán hàng hoặc giãn cont':balanceAfterBuy<3e9?' – ⚠️ số dư mỏng, thận trọng':' – ✓ đủ tiền lấy hàng'}</div>}
-          {cfRow&&minBalance!=null&&planned_balance<=minBalance*1.05&&<div>• 🔴 {targetWeek} là vùng <strong>đáy dòng tiền cả năm</strong> – tuần căng nhất, ưu tiên thu hồi công nợ trước khi nhận cont</div>}
-          {cfRow&&cfRow.thieuThuNo&&<div>• ⚠️ {targetWeek}: thu nợ chưa lập kế hoạch – số dư thực tế có thể cao hơn hiển thị</div>}
+          {cfRow&&<div>• ⚖️ Tổng hạn mức {targetWeek}: <strong style={{color:planned_balance<0?'#dc2626':'#16a34a'}}>{fB(planned_balance)}</strong> {planned_balance<0?<span style={{color:'#b45309'}}>(🔴 tuần HỤT dòng – cần đẩy bán & thu hồi công nợ)</span>:<span style={{color:'#15803d'}}>(✓ dư dòng)</span>}</div>}
+          {cfRow&&balanceAfterBuy!=null&&<div>• 🛒 Nếu lấy cont này vào {targetWeek}, hạn mức còn <strong style={{color:balanceAfterBuy<0?'#dc2626':balanceAfterBuy<2e9?'#f59e0b':'#16a34a'}}>{fB(balanceAfterBuy)}</strong>{balanceAfterBuy<0?' – 🔴 VỠ KẾ HOẠCH: phải đẩy thu hồi công nợ + bán hàng, hoặc giãn cont sang tuần khác':balanceAfterBuy<2e9?' – ⚠️ hạn mức mỏng, thận trọng':' – ✓ đủ nguồn lực lấy hàng'}</div>}
+          {cfRow&&minBalance!=null&&planned_balance<=minBalance*1.05&&<div>• 🔴 {targetWeek} là vùng <strong>hụt sâu nhất</strong> – tuần căng nhất, ưu tiên thu hồi công nợ + đẩy bán trước khi nhận cont</div>}
+          {cfRow&&cfRow.thieuThuNo&&<div>• ⚠️ {targetWeek}: chưa nhập KH doanh thu – hạn mức thực tế có thể cao hơn hiển thị (cần nhập sheet "Kế hoạch dòng theo DT dự kiến")</div>}
           {apOk===false&&<div>• 🔴 Công nợ sau mua vượt hạn mức – cần thu hồi CN hoặc tăng hạn mức</div>}
           {apOk===true&&<div>• ✓ Hạn mức tín dụng đủ (còn dư {fB(totalCreditMax-apAfter)})</div>}
           {!cfRow&&cashFlowData.length>0&&<div>• ℹ Không có KH cho {targetWeek} – chọn tuần khác để xem so sánh</div>}
@@ -1110,13 +1173,13 @@ const parseCashFlowCSV=(csvText)=>{
     if(!key) continue;
     byKey[key]=grid[i];
   }
-  const cell=(key,colIdx)=>{const r=byKey[key];return r?pn(r[colIdx]):null;};
+  const cell=(key,colIdx)=>{const r=byKey[norm(key)];return r?pn(r[colIdx]):null;};
   // duyệt qua các cột tuần, dựng bản ghi mỗi tuần
   const out=[];let lastThang='';
-  let prevSodu=null;
-  // đầu kỳ: lấy SODU ở cột dauky làm số dư khởi điểm
+  // Đầu kỳ hạn mức (cột ĐẦU KỲ) để cộng dồn fallback nếu GSheet thiếu giá trị
   const dauKyCol=colInfo.findIndex(c=>c&&c.dauky);
-  if(dauKyCol>=0){const v=cell('sodu',dauKyCol);if(v!=null)prevSodu=v;}
+  let prevHD=dauKyCol>=0?(cell('hm_hd',dauKyCol)||0):0;
+  let prevDD=dauKyCol>=0?(cell('hm_dd',dauKyCol)||0):0;
   colInfo.forEach((ci,colIdx)=>{
     if(!ci||ci.dauky) return;
     const thangRaw=String(monthHeader[colIdx]||'').trim();
@@ -1128,24 +1191,31 @@ const parseCashFlowCSV=(csvText)=>{
     const thuCN=cell('thu_cn',colIdx)||0;
     const thuDT=cell('thu_dt',colIdx)||0;
     const thuKhac=cell('thu_khac',colIdx)||0;
-    // ưu tiên dòng tổng có sẵn, fallback tự cộng
     const tongChi=(cell('tongchi',colIdx)!=null?cell('tongchi',colIdx):(chiHD+chiDD+chiKhac+chiNoi));
     const tongThu=(cell('tongthu',colIdx)!=null?cell('tongthu',colIdx):(thuCN+thuDT+thuKhac));
-    const rong=(cell('rong',colIdx)!=null?cell('rong',colIdx):(tongThu-tongChi));
-    // số dư: ưu tiên dòng SODU; nếu thiếu thì tự lũy kế
-    let sodu=cell('sodu',colIdx);
-    if(sodu==null){sodu=(prevSodu!=null?prevSodu:0)+rong;}
-    prevSodu=sodu;
+    const rong=tongThu-tongChi;
+    // ── TỔNG HẠN MỨC = HD + ĐĐ (cân đối nguồn lực mua–bán) ──
+    // Công thức gốc: HD[n]=HD[n-1]−chiHD−chiKhác−muaNội+TổngThu ; ĐĐ[n]=ĐĐ[n-1]−chiĐĐ
+    // Ưu tiên ĐỌC THẲNG dòng HANMUC/HM_HD/HM_DD đã tính trong GSheet; nếu trống thì tự cộng dồn.
+    let hmHD=cell('hm_hd',colIdx);
+    let hmDD=cell('hm_dd',colIdx);
+    if(hmHD==null) hmHD=prevHD-chiHD-chiKhac-chiNoi+tongThu;
+    if(hmDD==null) hmDD=prevDD-chiDD;
+    prevHD=hmHD; prevDD=hmDD;
+    let hanMuc=cell('hanmuc',colIdx);
+    if(hanMuc==null) hanMuc=hmHD+hmDD;   // Tổng hạn mức
     const khuyet=String(byKey['cb_khuyet']?byKey['cb_khuyet'][colIdx]:'').trim()!=='';
     out.push({
       thang,tuan:ci.tuan,week:ci.week,
-      nhapNgoai:chiHD+chiDD,    // tổng nhập ngoại (HD+ĐĐ) — tương thích UI cũ
+      nhapNgoai:chiHD+chiDD,
       chiHD,chiDD,muaNoi:chiNoi,chiKhac,
       tongChi,
       thuCN,thuDT,thuKhac,tongThu,
-      rong, balance:sodu,        // balance = số dư cân đối lũy kế (KHÔNG còn số cứng)
-      tongMua:tongChi,           // giữ field cũ cho phần kết chuyển HM theo tháng
-      dtTM:thuDT,                // map DT thương mại ~ thu theo KH doanh thu
+      rong,
+      hmHD,hmDD,
+      hanMuc, balance:hanMuc,    // balance = Tổng hạn mức (âm = tuần hụt dòng)
+      tongMua:tongChi,
+      dtTM:thuDT,
       thieuThuNo:khuyet,
     });
   });
