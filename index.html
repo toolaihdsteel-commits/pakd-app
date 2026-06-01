@@ -1000,7 +1000,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
                     {l:'💵 Thu công nợ',kh:planned_thuCN,tt:null},
                     {l:'📈 Thu theo KH bán',kh:planned_dtTM,tt:null},
                     {l:'💰 Tổng thu KH',kh:planned_thu,tt:null,bold:true},
-                    {l:'➖ Dòng ròng tuần (Thu−Chi)',kh:planned_rong,tt:null,isBalance:true},
+                    {l:'➖ Chênh lệch Thu−Chi trong tuần',kh:planned_rong,tt:null,isBalance:true},
                     {l:'   ↳ Hạn mức HD',kh:planned_hmHD,tt:null,isBalance:true},
                     {l:'   ↳ Hạn mức ĐĐ',kh:planned_hmDD,tt:null,isBalance:true},
                     {l:'⚖️ TỔNG HẠN MỨC (âm = hụt dòng)',kh:planned_balance,tt:null,isBalance:true,bold:true},
@@ -1064,7 +1064,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
                     <th style={{textAlign:'left'}}>Tuần</th>
                     <th style={{color:'#dc2626'}}>Tổng chi</th>
                     <th style={{color:'#16a34a'}}>Tổng thu</th>
-                    <th style={{color:'#7c3aed'}}>Dòng ròng</th>
+                    <th style={{color:'#7c3aed'}}>Thu − Chi</th>
                     <th>Tổng hạn mức</th>
                   </tr>
                 </thead>
@@ -1819,18 +1819,23 @@ const App=()=>{
     }
     setDbStatus(p=>({...p,loading:true,error:null}));
     try{
+      // Mỗi fetch luôn trả {type,data,err} — kể cả khi lỗi — để biết chính xác nguồn nào hỏng
+      const wrap=(type,p)=>p.then(d=>({type,data:d})).catch(e=>({type,data:null,err:e?.message||'lỗi'}));
       const toFetch=[];
-      if(which==='all'||which==='inv') toFetch.push(fetchCsv(GSHEET_INVENTORY).then(d=>({type:'inv',data:d})));
-      if(which==='all'||which==='ms') toFetch.push(fetchCsv(GSHEET_MINSTOCK).then(d=>({type:'ms',data:d})));
-      if(which==='all'||which==='lim') toFetch.push(fetchCsv(GSHEET_LIMITS).then(d=>({type:'lim',data:d})));
-      if(which==='all'||which==='uip') toFetch.push(fetchCsv(GSHEET_UPDATED_IMPORT).then(d=>({type:'uip',data:d})));
-      if(which==='all'||which==='fh') toFetch.push(fetchCsv(GSHEET_FLOOR_HISTORY).then(d=>({type:'fh',data:d})));
-      if(which==='all'||which==='cf') toFetch.push(fetchText(GSHEET_CASHFLOW).then(d=>({type:'cf',data:d})));
+      if(which==='all'||which==='inv') toFetch.push(wrap('inv',fetchCsv(GSHEET_INVENTORY)));
+      if(which==='all'||which==='ms') toFetch.push(wrap('ms',fetchCsv(GSHEET_MINSTOCK)));
+      if(which==='all'||which==='lim') toFetch.push(wrap('lim',fetchCsv(GSHEET_LIMITS)));
+      if(which==='all'||which==='uip') toFetch.push(wrap('uip',fetchCsv(GSHEET_UPDATED_IMPORT)));
+      if(which==='all'||which==='fh') toFetch.push(wrap('fh',fetchCsv(GSHEET_FLOOR_HISTORY)));
+      if(which==='all'||which==='cf') toFetch.push(wrap('cf',fetchText(GSHEET_CASHFLOW)));
       const results=await Promise.allSettled(toFetch);
-      let errMsg=null;
+      // Tên nguồn dễ hiểu để báo cáo rõ ràng thay vì "Lỗi" chung chung
+      const SRC_NAME={inv:'Tồn kho',ms:'Min/Max',lim:'Hạn mức',uip:'Giá nhập',fh:'Lịch sử Sàn',cf:'Dòng tiền'};
+      const okSrc=[]; const failSrc=[];
       results.forEach(r=>{
-        if(r.status==='rejected'){errMsg=r.reason?.message||'Lỗi';return;}
-        const{type,data}=r.value;if(!data) return;
+        const{type,data,err}=r.value||{};
+        if(err||!data){failSrc.push(SRC_NAME[type]||type||'?');return;}
+        okSrc.push(SRC_NAME[type]||type);
         if(type==='inv'){
           const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:r.thickness||'1.0',width:r.width||'1200',length:r.length||'C',coating:coatingFromGSheet(r.coating||'KP'),status:(r.status||'IN_STOCK').toUpperCase(),qtyKg:parseFloat(r.qtykg||r.qty_kg||r['qty kg']||0),avgCost:parseFloat(r.avgcost||r.avg_cost||r['avg cost']||0),expectedDeliveryDate:(r.expecteddeliverydate||r.expected_delivery_date||r['expecteddeliverydate']||r['expected delivery date']||'').trim()}));
           if(rows.length>0) setInvs(rows);
@@ -1933,8 +1938,16 @@ const App=()=>{
           }
         }
       });
-      setDbStatus({loading:false,error:errMsg,lastSync:new Date().toLocaleTimeString('vi-VN'),source:'gsheet'});
-    }catch(e){setDbStatus(p=>({...p,loading:false,error:e.message||'Lỗi'}));}
+      // Báo cáo rõ ràng: chỉ coi là LỖI khi KHÔNG nguồn nào tải được.
+      // Nếu tải được ≥1 nguồn → đồng bộ thành công (kèm ghi chú nguồn nào bỏ qua, nếu có).
+      let statusErr=null, statusWarn=null;
+      if(okSrc.length===0){
+        statusErr='Không tải được dữ liệu từ Google Sheet. Kiểm tra kết nối mạng hoặc quyền chia sẻ của Sheet.';
+      }else if(failSrc.length>0){
+        statusWarn='Đã đồng bộ '+okSrc.length+'/'+(okSrc.length+failSrc.length)+' nguồn. Tạm bỏ qua: '+failSrc.join(', ')+' (có thể tab trống hoặc chưa có dữ liệu).';
+      }
+      setDbStatus({loading:false,error:statusErr,warn:statusWarn,lastSync:new Date().toLocaleTimeString('vi-VN'),source:'gsheet'});
+    }catch(e){setDbStatus(p=>({...p,loading:false,error:'Không kết nối được Google Sheet: '+(e.message||'lỗi mạng')}));}
     // Fetch MonthlyRevenue từ CSV export (async riêng, không block)
     try{
       try{const cfText=await fetchText(GSHEET_CASHFLOW);const cfP=parseCashFlowCSV(cfText);if(cfP.length>0)setCashFlowData(cfP);}catch(e){console.warn('CF:',e.message);}
@@ -2494,10 +2507,10 @@ URL.revokeObjectURL(url);
             {k:'inventory',l:'📦 Tồn kho'},
             {k:'minstock',l:'📏 Min/Max'},
             {k:'floor',l:'💹 Giá Sàn'},
-            {k:'report',l:limitsWarnings.totalAlerts>0?`📈 BC ⚠${limitsWarnings.totalAlerts}`:'📈 Báo cáo'},
+            {k:'cashflow',l:'💰 Dòng Tiền'},
             {k:'scenario',l:'💾 Scenarios'},
             {k:'floorhistory',l:'🗓️ Lịch sử Sàn'},
-            {k:'cashflow',l:'💰 Dòng Tiền'},
+            {k:'report',l:limitsWarnings.totalAlerts>0?`📈 BC ⚠${limitsWarnings.totalAlerts}`:'📈 Báo cáo'},
           ].map(t=>(
             <button key={t.k} onClick={()=>setTab(t.k)} className={`nav-tab ${tab===t.k?'on':''}`}
               style={t.k==='report'&&limitsWarnings.totalAlerts>0?{color:'#dc2626',borderColor:'#fca5a5'}:t.k==='floor'&&tab!=='floor'?{color:'#0d9488'}:t.k==='cashflow'&&tab!=='cashflow'?{color:'#7c3aed'}:{}}>
@@ -2509,7 +2522,8 @@ URL.revokeObjectURL(url);
           <div style={{display:'flex',alignItems:'center',gap:6,background:bg4,border:`1px solid ${border1}`,borderRadius:5,padding:'3px 9px',fontSize:'.68rem',fontWeight:600}}>
             <Ic.Database/>
             {dbStatus.loading?<span style={{color:'#2563eb',display:'flex',alignItems:'center',gap:4,fontWeight:700}}><div className="spinner" style={{width:12,height:12}}/> Đang tải...</span>
-              :dbStatus.error?<span style={{color:'#dc2626',fontWeight:700}}>⚠ Lỗi</span>
+              :dbStatus.error?<span style={{color:'#dc2626',fontWeight:700}} title={dbStatus.error}>⚠ Lỗi kết nối</span>
+              :dbStatus.warn?<span style={{color:'#16a34a',fontWeight:700}} title={dbStatus.warn}>✓ {dbStatus.lastSync}</span>
               :dbStatus.lastSync?<span style={{color:'#16a34a',fontWeight:700}}>✓ {dbStatus.lastSync}</span>
               :<span style={{color:'#475569',fontWeight:700}}>Local</span>}
             <button onClick={()=>syncGoogleSheet('all')} disabled={dbStatus.loading||!ghVerified} className="btn btn-ghost" style={{padding:'1px 6px',fontSize:'.65rem',gap:3,marginLeft:2}}><Ic.Refresh/> Sync All</button>
@@ -4623,16 +4637,11 @@ URL.revokeObjectURL(url);
                                 <th style={{textAlign:'left'}}>Nhóm</th>
                                 <th style={{textAlign:'right'}}>Mác</th>
                                 <th style={{textAlign:'right'}}>Dày</th>
-                                <th style={{textAlign:'right'}}>SKU</th>
                                 <th style={{textAlign:'right'}}>Tồn (kg)</th>
-                                <th style={{textAlign:'right',background:'#fefce8'}}>BQ GV</th>
-                                <th style={{textAlign:'right',background:'#fef3c7'}}>Sàn TĐ</th>
-                                <th style={{textAlign:'right',background:'#fde047',color:'#713f12'}}>Sàn BH</th>
-                                <th style={{textAlign:'right',background:'#dbeafe'}}>Cốt lõi</th>
-                                <th style={{textAlign:'right',background:'#e9d5ff'}}>Thân thiết</th>
-                                <th style={{textAlign:'right',background:'#fed7aa'}}>KH lẻ</th>
-                                <th style={{textAlign:'right'}}>BQ ĐT</th>
-                                <th style={{textAlign:'right'}}>Sàn ĐT</th>
+                                <th style={{textAlign:'right',background:'#fef9c3',color:'#713f12'}}>Sàn BH</th>
+                                <th style={{textAlign:'right',background:'#eff6ff',color:'#1d4ed8'}}>Cốt lõi</th>
+                                <th style={{textAlign:'right',background:'#faf5ff',color:'#7c3aed'}}>Thân thiết</th>
+                                <th style={{textAlign:'right',background:'#fff7ed',color:'#ea580c'}}>KH lẻ</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -4641,16 +4650,11 @@ URL.revokeObjectURL(url);
                                   <td style={{paddingLeft:6,fontWeight:700,color:'#0f172a'}}>{g.label}</td>
                                   <td style={{textAlign:'right'}}>{g.alloy} {g.temper}</td>
                                   <td style={{textAlign:'right'}} className="mono">{g.minThick}-{g.maxThick}</td>
-                                  <td style={{textAlign:'right'}} className="mono">{g.skus||0}</td>
                                   <td style={{textAlign:'right'}} className="mono">{g.totalQty?fv(g.totalQty):'—'}</td>
-                                  <td style={{textAlign:'right',background:'#fefce8'}} className="mono">{g.avgCost?fv(g.avgCost):'—'}</td>
-                                  <td style={{textAlign:'right',background:'#fef3c7'}} className="mono">{g.autoFloor?fv(g.autoFloor):'—'}</td>
                                   <td style={{textAlign:'right',background:'#fef9c3',fontWeight:900,color:'#713f12'}} className="mono">{g.publishedFloor?fv(g.publishedFloor):'—'}</td>
                                   <td style={{textAlign:'right',background:'#eff6ff',color:'#1d4ed8'}} className="mono">{g.corePrice?fv(g.corePrice):'—'}</td>
                                   <td style={{textAlign:'right',background:'#faf5ff',color:'#7c3aed'}} className="mono">{g.loyalPrice?fv(g.loyalPrice):'—'}</td>
                                   <td style={{textAlign:'right',background:'#fff7ed',color:'#ea580c'}} className="mono">{g.newPrice?fv(g.newPrice):'—'}</td>
-                                  <td style={{textAlign:'right',color:'#64748b'}} className="mono">{g.avgCompPrice?fv(g.avgCompPrice):'—'}</td>
-                                  <td style={{textAlign:'right',color:'#64748b'}} className="mono">{g.avgCompFloor?fv(g.avgCompFloor):'—'}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -4663,9 +4667,8 @@ URL.revokeObjectURL(url);
                 })}
               </div>
             )}
-            <div style={{marginTop:12,display:'flex',justifyContent:'space-between',alignItems:'center',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
-              <span style={{fontSize:'.68rem',color:'#64748b'}}>💡 Đọc từ /floor/history.json — Data đã sync vào tab Lịch sử Sàn.</span>
-              <button className="btn btn-ghost btn-sm" onClick={loadFloorHistoryFromGithub} disabled={floorStatus.loading}>🔄 Refresh</button>
+            <div style={{marginTop:12,display:'flex',justifyContent:'flex-end',borderTop:'1px solid #e2e8f0',paddingTop:10}}>
+              <button className="btn btn-ghost btn-sm" onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))}>Đóng</button>
             </div>
           </div>
         </div>
