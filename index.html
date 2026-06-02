@@ -264,7 +264,7 @@ function parsePOData(rows){
     let remaining=remRaw!==''?poNum(remRaw):Math.max(ordered-delivered,0);
     if(remaining<0) remaining=0;
     return {
-      supplier:poGet(r,['Nhà CC','NhaCC','supplier'])||'?',
+      supplier:poGet(r,['Khách hàng','KhachHang','customer','Nhà CC','NhaCC','supplier'])||'?',
       po:poGet(r,['Số PO','SoPO','po'])||'?',
       poDate:poGet(r,['Ngày PO','NgayPO','date']),
       alloy,temper,coating,thickness,width,length,
@@ -2101,6 +2101,38 @@ const App=()=>{
     return {...p,inStock:st.stock,inTransit:st.transit,needBuy,coverStock:Math.min(st.stock,p.remaining),coverTransit:Math.max(Math.min(st.stock+st.transit,p.remaining)-st.stock,0)};
   }),[poData,stockByKey]);
 
+  // ── PHÂN BỔ PO THÔNG MINH vào từng dòng tồn kho ──
+  // Quy tắc: theo từng SKU, trừ TL PO chưa giao vào KHO trước (IN_STOCK), thiếu mới trừ ĐANG VỀ (IN_TRANSIT);
+  // trong mỗi nhóm, ưu tiên trừ dòng GIÁ VỐN THẤP NHẤT trước (giữ hàng đắt để bán). Trả map theo id dòng tồn.
+  const invAlloc=useMemo(()=>{
+    const out={}; // id -> {alloc, available, origin}
+    inventory.forEach(r=>{out[r.id]={alloc:0,available:parseFloat(r.qtyKg)||0,origin:parseFloat(r.qtyKg)||0};});
+    if(poTotalRemaining<=0) return out;
+    // gom dòng tồn theo SKU key
+    const byKey={};
+    inventory.forEach(r=>{const k=skuKeyNorm(r);(byKey[k]=byKey[k]||[]).push(r);});
+    Object.keys(byKey).forEach(k=>{
+      let rem=(poByKey[k]||{}).remaining||0;
+      if(rem<=0) return;
+      // sắp xếp: IN_STOCK trước IN_TRANSIT; trong mỗi loại, giá vốn thấp → cao
+      const rows=byKey[k].slice().sort((a,b)=>{
+        const sa=String(a.status).toUpperCase()==='IN_TRANSIT'?1:0;
+        const sb=String(b.status).toUpperCase()==='IN_TRANSIT'?1:0;
+        if(sa!==sb) return sa-sb;
+        return (parseFloat(a.avgCost)||0)-(parseFloat(b.avgCost)||0);
+      });
+      rows.forEach(r=>{
+        if(rem<=0) return;
+        const q=parseFloat(r.qtyKg)||0;
+        const take=Math.min(q,rem);
+        out[r.id].alloc=take;
+        out[r.id].available=q-take;
+        rem-=take;
+      });
+    });
+    return out;
+  },[inventory,poByKey,poTotalRemaining]);
+
   const floorPriceData=useMemo(()=>{
     const skuGroups=groupBySku(inventory);
     return skuGroups.map(grp=>{
@@ -3076,14 +3108,21 @@ URL.revokeObjectURL(url);
               </div>
               {excludePO&&poData.length>0&&(()=>{
                 const totStock=filteredInventory.reduce((s,r)=>s+(parseFloat(r.qtyKg)||0),0);
-                // PO chưa giao chỉ tính cho các SKU có mặt trong filteredInventory
+                // Số THỰC trừ = tổng đã phân bổ vào các dòng trong tầm nhìn (có thể < PO nếu kho không đủ)
+                const allocated=filteredInventory.reduce((s,r)=>s+((invAlloc[r.id]||{}).alloc||0),0);
                 const keysInView=new Set(filteredInventory.map(r=>skuKeyNorm(r)));
                 const poInView=Object.entries(poByKey).filter(([k])=>keysInView.has(k)).reduce((s,[,v])=>s+v.remaining,0);
-                const avail=totStock-poInView;
+                const shortage=Math.max(poInView-allocated,0); // PO chưa giao mà kho không đủ để dành
+                const avail=totStock-allocated;
                 return(
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:11}}>
-                    {[{l:'Tổng tồn (lọc)',v:fv(totStock)+' kg',c:'#15803d'},{l:'PO chưa giao (trừ)',v:'− '+fv(poInView)+' kg',c:'#b45309'},{l:'Khả dụng hợp lý',v:fv(avail)+' kg',c:avail>=0?'#1d4ed8':'#b91c1c'}].map((x,i)=>(
-                      <div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'1rem'}}>{x.v}</div></div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:11}}>
+                    {[
+                      {l:'Tổng tồn (lọc)',v:fv(totStock)+' kg',c:'#15803d'},
+                      {l:'Đã trừ cho PO',v:'− '+fv(allocated)+' kg',c:'#7c3aed'},
+                      {l:'Khả dụng hợp lý',v:fv(avail)+' kg',c:avail>=0?'#1d4ed8':'#b91c1c'},
+                      {l:'PO còn thiếu hàng',v:shortage>0?'⚠ '+fv(shortage)+' kg':'✓ đủ',c:shortage>0?'#b91c1c':'#15803d'},
+                    ].map((x,i)=>(
+                      <div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'.95rem'}}>{x.v}</div></div>
                     ))}
                   </div>
                 );
@@ -3129,20 +3168,25 @@ URL.revokeObjectURL(url);
                   <tr><th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th style={{width:72}}>Coating</th><th style={{width:90}}>Status</th><th style={{width:95}}>KL kg</th><th style={{width:105}}>Giá vốn đ/kg</th><th style={{width:115}}>Tổng Vốn VND</th><th style={{width:75}}>MinStock</th><th style={{width:115}}>Thiếu/Dư kg</th><th style={{width:100}}>Dự Kiến</th><th style={{width:28}}></th></tr>
                   {/* III.1: Summary row at top */}
                   <tr style={{background:'#e2e8f0'}}>
-                    <td colSpan={4} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredInventory.length} dòng)</td>
-                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#15803d',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(parseFloat(r.qtyKg)||0),0))} kg</td>
-                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#475569',fontWeight:800,fontSize:'.8rem'}}>{fv(weightedAvg(filteredInventory.map(r=>({qtyKg:parseFloat(r.qtyKg)||0,avgCost:parseFloat(r.avgCost)||0}))))} avg</td>
-                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#1d4ed8',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(parseFloat(r.qtyKg)||0)*(parseFloat(r.avgCost)||0),0))}</td>
+                    <td colSpan={4} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredInventory.length} dòng){excludePO&&poData.length>0&&<span style={{color:'#7c3aed',marginLeft:4}}>· đã trừ PO</span>}</td>
+                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#15803d',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0)),0))} kg</td>
+                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#475569',fontWeight:800,fontSize:'.8rem'}}>{fv(weightedAvg(filteredInventory.map(r=>({qtyKg:excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0),avgCost:parseFloat(r.avgCost)||0}))))} avg</td>
+                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#1d4ed8',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0))*(parseFloat(r.avgCost)||0),0))}</td>
                     <td/><td/><td/><td/>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredInventory.map((r,i)=>{
                     const k=skuKey(r),ms=minStockMap[k]||0;
-                    const grpQty=inventory.filter(x=>skuKey(x)===k).reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0);
-                    const poRem=(poByKey[skuKeyNorm(r)]||{}).remaining||0;
+                    const al=invAlloc[r.id]||{alloc:0,available:parseFloat(r.qtyKg)||0};
+                    const usePO=excludePO&&poData.length>0;
+                    const rowAlloc=al.alloc||0;
+                    const rowQty=parseFloat(r.qtyKg)||0;
+                    const rowAvail=usePO?al.available:rowQty;   // KL hiển thị (sau trừ nếu bật)
+                    // Tổng nhóm = tổng khả dụng (đã trừ PO nếu bật) để tính Min/Max cho đúng thực tế bán
+                    const grpQty=inventory.filter(x=>skuKey(x)===k).reduce((s,x)=>s+(usePO?((invAlloc[x.id]||{available:parseFloat(x.qtyKg)||0}).available):(parseFloat(x.qtyKg)||0)),0);
                     const ratio=ms>0?grpQty/ms:null;const delta=ms>0?grpQty-ms:null;
-                    const rowBg=ratio!==null&&ratio<0.8?'#fef2f2':ratio!==null&&ratio<1?'#fffbeb':'';
+                    const rowBg=usePO&&rowAlloc>0?'#faf5ff':ratio!==null&&ratio<0.8?'#fef2f2':ratio!==null&&ratio<1?'#fffbeb':'';
                     return(
                       <tr key={r.id} style={{background:rowBg}}>
                         <td style={{textAlign:'center',color:'#64748b',fontSize:'.72rem',fontWeight:700}} className="mono">{i+1}</td>
@@ -3157,11 +3201,20 @@ URL.revokeObjectURL(url);
                             {r.status==='IN_STOCK'?'🟢 Kho':'🟡 Đường'}
                           </button>
                         </td>
-                        <td><input className="inp inp-xs mono" style={{textAlign:'right',color:'#15803d',fontWeight:700}} value={fv(r.qtyKg)} onChange={e=>setInv(r.id,{qtyKg:pn(e.target.value)})}/></td>
+                        <td>
+                          {usePO?(
+                            <div style={{textAlign:'right'}}>
+                              <div className="mono" style={{fontWeight:800,color:rowAvail>0?'#15803d':'#b91c1c',fontSize:'.82rem'}}>{fv(rowAvail)}</div>
+                              {rowAlloc>0&&<div className="mono" style={{fontSize:'.55rem',color:'#7c3aed',fontWeight:700,marginTop:1}}>gốc {fv(rowQty)} · PO −{fv(rowAlloc)}</div>}
+                            </div>
+                          ):(
+                            <input className="inp inp-xs mono" style={{textAlign:'right',color:'#15803d',fontWeight:700}} value={fv(r.qtyKg)} onChange={e=>setInv(r.id,{qtyKg:pn(e.target.value)})}/>
+                          )}
+                        </td>
                         <td><input className="inp inp-xs mono" style={{textAlign:'right',fontWeight:600}} value={fv(r.avgCost)} onChange={e=>setInv(r.id,{avgCost:pn(e.target.value)})}/></td>
-                        <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontSize:'.78rem',fontWeight:700}}>{fv((parseFloat(r.qtyKg)||0)*(parseFloat(r.avgCost)||0))}</td>
+                        <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontSize:'.78rem',fontWeight:700}}>{fv(rowAvail*(parseFloat(r.avgCost)||0))}</td>
                         <td style={{textAlign:'center'}}>{ms>0?(<div><div style={{fontSize:'.63rem',color:ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#6d28d9':'#16a34a',fontWeight:800}}>{Math.round((ratio||0)*100)}%</div><div style={{fontSize:'.57rem',color:'#475569',fontWeight:600}}>{fv(ms)}</div></div>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}</td>
-                        <td style={{textAlign:'right',paddingRight:9}}>{delta!=null?(<span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲+':'▼'}{fv(Math.abs(delta))}</span>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}{excludePO&&poRem>0&&<div className="mono" style={{fontSize:'.58rem',color:'#7c3aed',fontWeight:800,marginTop:2}}>PO −{fv(poRem)} → KD {fv(grpQty-poRem)}</div>}</td>
+                        <td style={{textAlign:'right',paddingRight:9}}>{delta!=null?(<span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲+':'▼'}{fv(Math.abs(delta))}</span>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}</td>
                         <td style={{textAlign:'center',padding:'4px 6px',fontSize:'.75rem',fontWeight:500,color:'#334155'}}>{r.expectedDeliveryDate||'—'}</td>
                         <td><button className="btn-danger" onClick={()=>delInv(r.id)}><Ic.X/></button></td>
                       </tr>
@@ -4447,7 +4500,7 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:8}}>
                 <div>
                   <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📑 Quản lý PO đã ký</h2>
-                  <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:2}}>SKU đang ở PO nào · kho đáp ứng · đang về · còn thiếu cần đặt (GSheet gid=2015387961)</p>
+                  <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:2}}>Đơn khách đã ký (THACO, KIM LONG…) · kho để dành giao · đang về · còn thiếu cần đặt mua (GSheet gid=2015387961)</p>
                 </div>
                 <div style={{display:'flex',gap:8,alignItems:'center'}}>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('po')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync PO</button>
@@ -4480,7 +4533,7 @@ URL.revokeObjectURL(url);
                     <div className="card" style={{marginBottom:12,padding:'8px 12px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
                       <span style={{fontSize:'.72rem',fontWeight:800,color:'#334155'}}>Lọc:</span>
                       <select className="inp inp-xs" style={{width:'auto'}} value={poFilter.supplier} onChange={e=>setPoFilter(p=>({...p,supplier:e.target.value}))}>
-                        <option value="ALL">Tất cả NCC</option>
+                        <option value="ALL">Tất cả khách hàng</option>
                         {suppliers.map(s=><option key={s} value={s}>{s}</option>)}
                       </select>
                       <input className="inp inp-xs" style={{width:200}} placeholder="🔍 Tìm PO / mác / quy cách..." value={poFilter.search} onChange={e=>setPoFilter(p=>({...p,search:e.target.value}))}/>
