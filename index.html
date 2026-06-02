@@ -619,7 +619,7 @@ const defInputs={
   supplierName:'Yuwon Steel',creator:'Nguyễn Văn A',
   paymentMethod:'TT',capitalCostPercent:7.8,
   lcMargin:10,lcDays:90,lcOpenFee:0.2,lcInterest:5.8,
-  exchangeRate:26150,managementFee:1.0,
+  exchangeRate:0,managementFee:1.5,
   leadTime:0,holdingTime:0,
   freightTotal:45000000,importTax:0,processingCost:0,
   businessRiskPercent:1.5,customerCreditDays:30,lendingRate:7.8,
@@ -2537,7 +2537,6 @@ URL.revokeObjectURL(url);
           <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title={ghVerified?`✓ GitHub: ${ghUser?.login||'?'} — Click để chỉnh cấu hình`:'Cấu hình kết nối GitHub'} style={{padding:'4px 9px',fontSize:'.72rem',background:ghVerified?'#dcfce7':'#fee2e2',border:`1px solid ${ghVerified?'#86efac':'#fca5a5'}`,color:ghVerified?'#14532d':'#991b1b'}}>
             {ghVerified?`✓ GitHub: ${ghUser?.login||'?'}`:'⚠️ Chưa xác thực GitHub'}
           </button>
-          <button className="btn btn-solid btn-sm" onClick={()=>window.print()}><Ic.Print/> In A4</button>
         </div>
       </div>
 
@@ -2553,8 +2552,9 @@ URL.revokeObjectURL(url);
               <div className="card">
                 <div className="sh"><Ic.Ship/>Thông số nhập khẩu</div>
                 <label className="lbl" style={{color:'#1d4ed8'}}>Tỷ giá USD/VND</label>
-                <input className="inp mono" style={{fontSize:'1.05rem',fontWeight:800,color:'#1d4ed8',textAlign:'right',marginBottom:9}} value={fv(inputs.exchangeRate)} onChange={e=>setInp('exchangeRate',pn(e.target.value))}/>
-                <div style={{marginBottom:7}}><label className="lbl" style={{color:'#6d28d9'}}>Hệ số QL %</label><input type="number" step=".1" className="inp inp-xs mono" style={{color:'#6d28d9',fontWeight:700}} value={inputs.managementFee} onChange={e=>setInp('managementFee',parseFloat(e.target.value)||0)}/></div>
+                <input className="inp mono" placeholder="⚠ Nhập tỷ giá..." style={{fontSize:'1.05rem',fontWeight:800,color:'#1d4ed8',textAlign:'right',marginBottom:inputs.exchangeRate>0?9:3,border:inputs.exchangeRate>0?undefined:'1.5px solid #f59e0b',background:inputs.exchangeRate>0?undefined:'#fffbeb'}} value={inputs.exchangeRate>0?fv(inputs.exchangeRate):''} onChange={e=>setInp('exchangeRate',pn(e.target.value))}/>
+                {!(inputs.exchangeRate>0)&&<div style={{fontSize:'.62rem',color:'#b45309',fontWeight:700,marginBottom:9,lineHeight:1.4}}>⚠ Vui lòng nhập tỷ giá USD/VND để tính toán</div>}
+                <div style={{marginBottom:7}}><label className="lbl" style={{color:'#6d28d9'}}>CP về kho %</label><input type="number" step=".1" className="inp inp-xs mono" style={{color:'#6d28d9',fontWeight:700}} value={inputs.managementFee} onChange={e=>setInp('managementFee',parseFloat(e.target.value)||0)}/></div>
                 <div style={{display:'flex',gap:'5px',marginBottom:6}}>
                   {['TT','LC'].map(m=><button key={m} className={`status-btn ${inputs.paymentMethod===m?(m==='TT'?'s-stock':'s-transit'):'off'}`} onClick={()=>setInp('paymentMethod',m)}>{m==='TT'?'T/T':'L/C'}</button>)}
                 </div>
@@ -2568,7 +2568,7 @@ URL.revokeObjectURL(url);
                 {/* II.5: Invoice, QL, CP TC summary */}
                 {result&&(
                   <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:4}}>
-                    {[{l:'Invoice',v:result.invoiceVND,c:'#334155'},{l:`QL ${inputs.managementFee}%`,v:result.mgmt,c:'#6d28d9'},{l:'CP TC',v:result.finVND,c:'#b91c1c'}].map((x,i)=>(
+                    {[{l:'Invoice',v:result.invoiceVND,c:'#334155'},{l:`CP về kho ${inputs.managementFee}%`,v:result.mgmt,c:'#6d28d9'},{l:'CP TC',v:result.finVND,c:'#b91c1c'}].map((x,i)=>(
                       <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:bg4,border:`1px solid ${border1}`,borderRadius:4,padding:'3px 8px'}}>
                         <span style={{fontSize:'.65rem',color:'#475569',fontWeight:700}}>{x.l}</span>
                         <span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:x.c}}>{fv(x.v)}</span>
@@ -2599,6 +2599,9 @@ URL.revokeObjectURL(url);
                       <>
                         <div className="mono" style={{fontSize:'1.3rem',fontWeight:900,color:result.totalGrossProfit>=0?'#15803d':'#b91c1c',lineHeight:1.1}}>{result.totalGrossProfit>=0?'+':''}{fv(result.totalGrossProfit)}</div>
                         <div style={{fontSize:'.68rem',color:'#475569',fontWeight:600,marginTop:2}}>đ · toàn bộ lô</div>
+                        {(()=>{const pct=result.avgProfitPerKg!=null&&result.globalAvgAfter>0?(result.avgProfitPerKg/result.globalAvgAfter*100):null;return pct!=null?(
+                          <div style={{fontSize:'.72rem',fontWeight:800,marginTop:3,color:pct>=0?'#15803d':'#b91c1c'}}>{pct>=0?'+':''}{pct.toFixed(2)}% Lãi/GV BQ</div>
+                        ):null;})()}
                         <div style={{display:'flex',gap:5,justifyContent:'center',marginTop:6}}>
                           <div style={{textAlign:'center',background:'#fff',border:'1px solid #cbd5e1',borderRadius:5,padding:'4px 8px'}}>
                             <div style={{fontSize:'.57rem',color:'#475569',fontWeight:700}}>BQ lãi/kg</div>
@@ -2642,6 +2645,7 @@ URL.revokeObjectURL(url);
                   <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu PA mua hiện tại lên GitHub':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
                     {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu PA cloud
                   </button>
+                  <button className="btn btn-solid btn-sm" onClick={()=>window.print()} title="In Phương án mua hàng ra giấy A4" style={{padding:'4px 9px',fontSize:'.72rem'}}><Ic.Print/> In A4</button>
                   <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải danh sách PA đã lưu trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
                     📂 Tải PA cloud
                   </button>
@@ -4324,6 +4328,7 @@ URL.revokeObjectURL(url);
                   <th>Giá CIF (USD/Tấn)</th>
                   <th>Về kho (đ/kg)</th>
                   <th>GV BQ sau nhập</th>
+                  <th>Giá bán tham chiếu</th>
                   <th>Lãi/kg</th>
                   <th>% Lãi/GV BQ</th>
                   <th>Tồn sau nhập (kg)</th>
@@ -4343,6 +4348,7 @@ URL.revokeObjectURL(url);
                       <td>{fv(b.priceFC)}</td>
                       <td>{fv(b.veKhoPerKg)}</td>
                       <td style={{fontWeight:'bold',color:'#1d4ed8'}}>{fv(b.avgAfter)}</td>
+                      <td style={{fontWeight:'bold',color:'#15803d'}}>{b.hasSellPrice?fv(b.sellPrice):'—'}</td>
                       <td className={b.hasSellPrice?(b.realProfitPerKg>=0?'text-green':'text-red'):''}>
                         {b.hasSellPrice?(b.realProfitPerKg>=0?'+':'')+fv(b.realProfitPerKg):'—'}
                       </td>
@@ -4364,6 +4370,7 @@ URL.revokeObjectURL(url);
                   <td></td>
                   <td>{fv(result.blends.reduce((s,b)=>s+b.qtyKg*(b.veKhoPerKg||0),0)/(result.totalKg||1))}</td>
                   <td style={{color:'#1d4ed8',fontWeight:'bold'}}>{fv(result.globalAvgAfter)}</td>
+                  <td style={{color:'#15803d',fontWeight:'bold'}}>{(()=>{const priced=result.blends.filter(b=>b.hasSellPrice);const totKg=priced.reduce((s,b)=>s+(b.qtyKg||0),0);return totKg>0?fv(priced.reduce((s,b)=>s+(b.qtyKg||0)*(b.sellPrice||0),0)/totKg):'—';})()}</td>
                   <td className={result.avgProfitPerKg>=0?'text-green':'text-red'}>
                     {result.avgProfitPerKg!=null?(result.avgProfitPerKg>=0?'+':'')+fv(result.avgProfitPerKg):'—'}
                   </td>
@@ -4410,6 +4417,70 @@ URL.revokeObjectURL(url);
               </div>
             </div>
           </div>
+          {/* IV. Dòng tiền tuần thanh toán đã chọn */}
+          {(()=>{
+            const targetWeek=cfMode==='manual'&&cfManualWeek?cfManualWeek:getCurrentWeekLabel();
+            const cfRow=cashFlowData.find(r=>matchWeekLabel(r.tuan,targetWeek));
+            const tongMua=result.invoiceVND||0;
+            const vat=tongMua*0.1;
+            const planTong=(cfRow?cfRow.nhapNgoai||0:0)+(cfRow?cfRow.muaNoi||0:0);
+            const balanceAfterBuy=cfRow?((cfRow.hanMuc||0)-((tongMua+vat)-planTong)):null;
+            return(
+              <div className="print-section" style={{pageBreakInside:'avoid'}}>
+                <div className="print-section-title">IV. Dòng tiền tuần thanh toán — {targetWeek}{cfRow?` (${cfRow.thang||''})`:''}</div>
+                {cfRow?(
+                  <>
+                    <div className="print-grid-4">
+                      <div className="print-box"><div className="print-box-title">Tuần thanh toán</div><div className="print-box-value text-blue">{targetWeek}</div></div>
+                      <div className="print-box"><div className="print-box-title">PA mua (gồm VAT)</div><div className="print-box-value text-blue">{fv(tongMua+vat)}đ</div></div>
+                      <div className="print-box"><div className="print-box-title">KH chi mua (tuần)</div><div className="print-box-value">{fv(planTong)}đ</div></div>
+                      <div className="print-box"><div className="print-box-title">Tổng thu KH (tuần)</div><div className="print-box-value text-green">{fv(cfRow.tongThu||0)}đ</div></div>
+                    </div>
+                    <table className="print-table-a4" style={{marginTop:10}}>
+                      <thead><tr><th>Hạn mức tuần (KH)</th><th>Hạn mức sau khi mua PA này</th><th>Dòng ròng (KH)</th></tr></thead>
+                      <tbody><tr>
+                        <td className={(cfRow.hanMuc||0)>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{fv(cfRow.hanMuc||0)}đ</td>
+                        <td className={balanceAfterBuy!=null&&balanceAfterBuy>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{balanceAfterBuy!=null?fv(balanceAfterBuy)+'đ':'—'}{balanceAfterBuy!=null&&balanceAfterBuy<0?' ⚠ HỤT DÒNG':''}</td>
+                        <td className={(cfRow.rong||0)>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{fv(cfRow.rong||0)}đ</td>
+                      </tr></tbody>
+                    </table>
+                  </>
+                ):(
+                  <div style={{padding:'8px 0',fontStyle:'italic'}}>Không có dữ liệu Kế hoạch dòng tiền cho {targetWeek}. Vào tab Dòng Tiền để chọn tuần và Sync dữ liệu.</div>
+                )}
+              </div>
+            );
+          })()}
+          {/* V. Chi tiết SKU lô mua (cho người duyệt) */}
+          {result?.blends?.length>0&&(
+            <div className="print-section">
+              <div className="print-section-title">V. Chi tiết từng SKU (người duyệt xem)</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'10px'}}>
+                {result.blends.map((b,i)=>{
+                  const minKg=b.minStock||0;
+                  const minDelta=minKg>0?b.qtyAfter-minKg:null;
+                  const isOverMax=b.maxStock!=null&&b.qtyAfter>b.maxStock;
+                  return(
+                    <div key={b.skuKey+'_print_'+i} style={{border:'1px solid #000',borderRadius:4,padding:'8px 10px',pageBreakInside:'avoid',fontSize:'9pt'}}>
+                      <div style={{display:'flex',justifyContent:'space-between',borderBottom:'1px solid #999',paddingBottom:4,marginBottom:5}}>
+                        <div><strong style={{fontSize:'10.5pt'}}>{b.alloy} {b.temper}</strong> <span style={{fontFamily:'monospace'}}>{b.thickness}×{b.width}×{b.length} [{b.coating==='1E'?'PE':'NOPE'}]</span></div>
+                        <div style={{fontWeight:'bold'}}>{b.hasSellPrice?(b.isRisk?'LỖ':b.realProfitPerKg>0?'LÃI':'HÒA'):'Chưa có giá'}</div>
+                      </div>
+                      <table style={{width:'100%',borderCollapse:'collapse',fontSize:'8.5pt'}}>
+                        <tbody>
+                          <tr><td style={{padding:'2px 4px'}}>Trong kho</td><td style={{textAlign:'right',fontFamily:'monospace'}}>{fv(b.qtyStock)} kg @ {fv(b.avgStock)}</td><td style={{padding:'2px 4px'}}>Đang về</td><td style={{textAlign:'right',fontFamily:'monospace'}}>{fv(b.qtyTransit)} kg @ {fv(b.avgTransit)}</td></tr>
+                          <tr><td style={{padding:'2px 4px'}}>Lô mới</td><td style={{textAlign:'right',fontFamily:'monospace'}}>{fv(b.qtyKg)} kg @ {fv(b.veKhoPerKg)}</td><td style={{padding:'2px 4px'}}>GV BQ HT</td><td style={{textAlign:'right',fontFamily:'monospace'}}>{fv(b.avgCurrent)}</td></tr>
+                          <tr><td style={{padding:'2px 4px'}}>GV BQ sau nhập</td><td style={{textAlign:'right',fontFamily:'monospace',fontWeight:'bold',color:'#1d4ed8'}}>{fv(b.avgAfter)}</td><td style={{padding:'2px 4px'}}>Giá bán tham chiếu</td><td style={{textAlign:'right',fontFamily:'monospace',fontWeight:'bold',color:'#15803d'}}>{b.hasSellPrice?fv(b.sellPrice):'—'}</td></tr>
+                          <tr><td style={{padding:'2px 4px'}}>Lãi/kg</td><td style={{textAlign:'right',fontFamily:'monospace',fontWeight:'bold'}} className={b.hasSellPrice?(b.realProfitPerKg>=0?'text-green':'text-red'):''}>{b.hasSellPrice?(b.realProfitPerKg>=0?'+':'')+fv(b.realProfitPerKg):'—'}</td><td style={{padding:'2px 4px'}}>% Lãi/BQSN</td><td style={{textAlign:'right',fontFamily:'monospace',fontWeight:'bold'}} className={b.profitPct==null?'':b.profitPct>=0?'text-green':'text-red'}>{b.profitPct!=null?(b.profitPct>=0?'+':'')+b.profitPct.toFixed(1)+'%':'—'}</td></tr>
+                          <tr><td style={{padding:'2px 4px'}}>Tổng lãi lô</td><td style={{textAlign:'right',fontFamily:'monospace',fontWeight:'bold'}} className={b.hasSellPrice?(b.grossProfitVND>=0?'text-green':'text-red'):''}>{b.hasSellPrice?(b.grossProfitVND>=0?'+':'')+fv(b.grossProfitVND)+'đ':'—'}</td><td style={{padding:'2px 4px'}}>Tồn sau nhập</td><td style={{textAlign:'right',fontFamily:'monospace'}}>{fv(b.qtyAfter)} kg{minKg>0?(isOverMax?' (quá max)':minDelta>=0?` (dư +${fv(minDelta)})`:` (thiếu ${fv(Math.abs(minDelta))})`):''}</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div style={{display:'flex',justifyContent:'space-around',marginTop:'40px',textAlign:'center',pageBreakInside:'avoid'}}>
             <div><strong>Lập bảng</strong><br/><br/><br/><br/><span>{inputs.creator}</span></div>
             <div><strong>Trưởng Phòng</strong><br/><br/><br/><br/><span>Ký tên</span></div>
