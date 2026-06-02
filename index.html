@@ -365,7 +365,9 @@ const findUpdatedImportPrice=(sku,updatedPrices,exchangeRate)=>{
   const thick=parseFloat(sku.thickness)||0;
   const match=updatedPrices.find(p=>p.alloy===sku.alloy&&p.temper===sku.temper&&thick>=parseFloat(p.minThick||0)&&thick<=parseFloat(p.maxThick||999));
   if(!match) return null;
-  const priceVNDperKg=(parseFloat(match.priceFC)||0)/1000*(exchangeRate||1)*(parseFloat(match.importCoef)||1);
+  // Chưa nhập tỷ giá (≤0) → KHÔNG quy đổi VND (tránh hiện số vô nghĩa như "4")
+  const exRate=parseFloat(exchangeRate)||0;
+  const priceVNDperKg=exRate>0?((parseFloat(match.priceFC)||0)/1000*exRate*(parseFloat(match.importCoef)||1)):0;
   return{
     priceFC:parseFloat(match.priceFC)||0,
     importCoef:parseFloat(match.importCoef)||1,
@@ -3575,9 +3577,10 @@ URL.revokeObjectURL(url);
                             if(matches.length===0) return null;
                             // WA by qty
                             const totQty=skuDetails2.reduce((s,r)=>s+r.totalQty,0);
-                            const priceVND=skuDetails2.reduce((s,r,idx)=>{
+                            const exR=parseFloat(inputs.exchangeRate)||0;
+                            const priceVND=exR<=0?0:skuDetails2.reduce((s,r,idx)=>{
                               const m=matches[idx];
-                              return s+r.totalQty*(m?(m.priceFC||0)/1000*inputs.exchangeRate*(m.importCoef||1):0);
+                              return s+r.totalQty*(m?(m.priceFC||0)/1000*exR*(m.importCoef||1):0);
                             },0);
                             const priceFc=skuDetails2.reduce((s,r,idx)=>{
                               const m=matches[idx];return s+r.totalQty*(m?m.priceFC||0:0);
@@ -3631,21 +3634,27 @@ URL.revokeObjectURL(url);
                             </td>
                             {/* 💰 Giá nhập tuần trước (I.2) */}
                             <td style={{textAlign:'right',paddingRight:6,background:'#dbeafe'}}>
-                              {prevWeekMatch&&prevWeekMatch.priceVND>0?(
+                              {(parseFloat(inputs.exchangeRate)||0)<=0
+                                ?<span style={{color:'#b45309',fontSize:'.6rem',fontStyle:'italic',fontWeight:700}}>⚠ nhập tỷ giá</span>
+                                :prevWeekMatch&&prevWeekMatch.priceVND>0?(
                                 <>
                                   <div className="mono" style={{fontWeight:800,color:'#1e40af',fontSize:'.82rem'}}>{fv(prevWeekMatch.priceVND)}</div>
                                   <div style={{fontSize:'.55rem',color:'#475569',fontWeight:600}}>{prevWeekMatch.date}</div>
                                 </>
-                              ):<span style={{color:'#94a3b8',fontSize:'.65rem',fontStyle:'italic'}}>—</span>}
+                              ):<span style={{color:'#94a3b8',fontSize:'.65rem',fontStyle:'italic'}} title="Không có dữ liệu giá nhập trong tuần trước (theo lịch). Kiểm tra cột UpdateDate trên GSheet tab Giá nhập.">— không có tuần trước</span>}
                             </td>
                             {/* 💰 Giá nhập HT */}
                             <td style={{textAlign:'right',paddingRight:6,background:'#e0f2fe'}}>
-                              <div className="mono" style={{fontWeight:800,color:'#0369a1',fontSize:'.82rem'}}>{g.avgNewImportPrice>0?fv(g.avgNewImportPrice):'—'}</div>
-                              {g.avgNewImportPrice>0&&prevWeekMatch&&prevWeekMatch.priceVND>0&&(
-                                <div style={{fontSize:'.55rem',color:g.avgNewImportPrice>prevWeekMatch.priceVND?'#dc2626':'#15803d',fontWeight:700}}>
-                                  {g.avgNewImportPrice>prevWeekMatch.priceVND?'▲':'▼'}{fv(Math.abs(g.avgNewImportPrice-prevWeekMatch.priceVND))}
-                                </div>
-                              )}
+                              {(parseFloat(inputs.exchangeRate)||0)<=0
+                                ?<div style={{fontSize:'.6rem',color:'#b45309',fontWeight:700,fontStyle:'italic'}}>⚠ nhập tỷ giá</div>
+                                :<>
+                                  <div className="mono" style={{fontWeight:800,color:'#0369a1',fontSize:'.82rem'}}>{g.avgNewImportPrice>0?fv(g.avgNewImportPrice):'—'}</div>
+                                  {g.avgNewImportPrice>0&&prevWeekMatch&&prevWeekMatch.priceVND>0&&(
+                                    <div style={{fontSize:'.55rem',color:g.avgNewImportPrice>prevWeekMatch.priceVND?'#dc2626':'#15803d',fontWeight:700}}>
+                                      {g.avgNewImportPrice>prevWeekMatch.priceVND?'▲':'▼'}{fv(Math.abs(g.avgNewImportPrice-prevWeekMatch.priceVND))}
+                                    </div>
+                                  )}
+                                </>}
                             </td>
                             {/* 🏭 BQ Đối thủ */}
                             <td style={{textAlign:'right',paddingRight:6,background:'#fafafa',opacity:.65}}>
