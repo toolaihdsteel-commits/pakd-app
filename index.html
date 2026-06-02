@@ -4444,8 +4444,10 @@ URL.revokeObjectURL(url);
             const cfRow=cashFlowData.find(r=>matchWeekLabel(r.tuan,targetWeek));
             const tongMua=result.invoiceVND||0;
             const vat=tongMua*0.1;
-            const planTong=(cfRow?cfRow.nhapNgoai||0:0)+(cfRow?cfRow.muaNoi||0:0);
-            const balanceAfterBuy=cfRow?((cfRow.hanMuc||0)-((tongMua+vat)-planTong)):null;
+            const paMua=tongMua+vat;                       // PA Mua (gồm VAT)
+            const hanMucKH=cfRow?(cfRow.hanMuc||0):0;       // Hạn mức tuần (KH)
+            // Hạn mức sau khi mua PA này = Hạn mức tuần (KH) − PA Mua (gồm VAT)
+            const balanceAfterBuy=cfRow?(hanMucKH-paMua):null;
             return(
               <div className="print-section" style={{pageBreakInside:'avoid'}}>
                 <div className="print-section-title">IV. Dòng tiền tuần thanh toán — {targetWeek}{cfRow?` (${cfRow.thang||''})`:''}</div>
@@ -4453,18 +4455,20 @@ URL.revokeObjectURL(url);
                   <>
                     <div className="print-grid-4">
                       <div className="print-box"><div className="print-box-title">Tuần thanh toán</div><div className="print-box-value text-blue">{targetWeek}</div></div>
-                      <div className="print-box"><div className="print-box-title">PA mua (gồm VAT)</div><div className="print-box-value text-blue">{fv(tongMua+vat)}đ</div></div>
-                      <div className="print-box"><div className="print-box-title">KH chi mua (tuần)</div><div className="print-box-value">{fv(planTong)}đ</div></div>
+                      <div className="print-box"><div className="print-box-title">PA mua (gồm VAT)</div><div className="print-box-value text-blue">{fv(paMua)}đ</div></div>
+                      <div className="print-box"><div className="print-box-title">Tổng chi KH (tuần)</div><div className="print-box-value">{fv(cfRow.tongChi||0)}đ</div></div>
                       <div className="print-box"><div className="print-box-title">Tổng thu KH (tuần)</div><div className="print-box-value text-green">{fv(cfRow.tongThu||0)}đ</div></div>
                     </div>
                     <table className="print-table-a4" style={{marginTop:10}}>
-                      <thead><tr><th>Hạn mức tuần (KH)</th><th>Hạn mức sau khi mua PA này</th><th>Dòng ròng (KH)</th></tr></thead>
+                      <thead><tr><th>Hạn mức tuần (KH)</th><th>PA Mua (gồm VAT)</th><th>Hạn mức sau khi mua PA này</th><th>Dòng ròng KH (Thu − Chi)</th></tr></thead>
                       <tbody><tr>
-                        <td className={(cfRow.hanMuc||0)>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{fv(cfRow.hanMuc||0)}đ</td>
+                        <td className={hanMucKH>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{fv(hanMucKH)}đ</td>
+                        <td className="text-blue" style={{fontWeight:'bold'}}>{fv(paMua)}đ</td>
                         <td className={balanceAfterBuy!=null&&balanceAfterBuy>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{balanceAfterBuy!=null?fv(balanceAfterBuy)+'đ':'—'}{balanceAfterBuy!=null&&balanceAfterBuy<0?' ⚠ HỤT DÒNG':''}</td>
                         <td className={(cfRow.rong||0)>=0?'text-green':'text-red'} style={{fontWeight:'bold'}}>{fv(cfRow.rong||0)}đ</td>
                       </tr></tbody>
                     </table>
+                    <div style={{fontSize:'8.5pt',fontStyle:'italic',marginTop:4,color:'#444'}}>Ghi chú: Hạn mức sau khi mua = Hạn mức tuần (KH) − PA Mua (gồm VAT). Tổng chi tuần đã gồm chi HĐ + chi ĐĐ + chi nội + chi khác.</div>
                   </>
                 ):(
                   <div style={{padding:'8px 0',fontStyle:'italic'}}>Không có dữ liệu Kế hoạch dòng tiền cho {targetWeek}. Vào tab Dòng Tiền để chọn tuần và Sync dữ liệu.</div>
