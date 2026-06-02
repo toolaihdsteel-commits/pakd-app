@@ -98,7 +98,10 @@ select.inp option{background:#ffffff;}
 @media print{
   .no-print,.screen-container{display:none !important;}
   .print-container{display:block !important;font-family:'Times New Roman',Times,serif;color:#000;background:#fff;padding:20px;}
-  body{background:white;color:black;height:auto;overflow:visible;}
+  /* Bỏ giới hạn chiều cao/overflow để In ra đủ nhiều trang (không bị cắt sau mục III) */
+  html,body{background:white !important;color:black !important;height:auto !important;min-height:0 !important;overflow:visible !important;}
+  #root{height:auto !important;min-height:0 !important;overflow:visible !important;display:block !important;}
+  #root>div{height:auto !important;min-height:0 !important;overflow:visible !important;display:block !important;}
   @page{size:A4 landscape;margin:15mm;}
   .print-title{text-align:center;font-size:18pt;font-weight:bold;margin-bottom:5px;text-transform:uppercase;}
   .print-subtitle{text-align:center;font-size:11pt;font-style:italic;margin-bottom:20px;}
@@ -2623,11 +2626,29 @@ URL.revokeObjectURL(url);
             <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',background:bg1}}>
               {/* Toolbar */}
               <div style={{padding:'7px 11px',borderBottom:`1px solid ${border1}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:bg2}}>
-                <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
                   <Ic.Ship/><span style={{fontWeight:800,fontSize:'.86rem',color:'#0f172a'}}>Lô hàng dự định mua</span>
                   <span className="tag tb">{products.length} SKU</span>
                   {result&&<span className="tag ts mono">{fv(result.totalKg)} kg</span>}
                   {result&&<span className="tag ty mono">{fu(result.invoiceUSD)}</span>}
+                  {/* ─── Chọn tuần Cont về (thanh toán) — dùng cho In A4 & tab Dòng Tiền ─── */}
+                  <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 2px'}}/>
+                  <div style={{display:'flex',alignItems:'center',gap:5,background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'3px 8px'}} title="Tuần Container về cần thanh toán — dùng để In A4 dòng tiền & phân tích tab Dòng Tiền">
+                    <span style={{fontSize:'.68rem',fontWeight:800,color:'#1e40af'}}>🚢 Tuần Cont về:</span>
+                    <div style={{display:'flex',border:'1px solid #93c5fd',borderRadius:5,overflow:'hidden',background:'#fff'}}>
+                      <button onClick={()=>setCFMode('auto')} style={{padding:'2px 8px',fontSize:'.66rem',fontWeight:800,border:'none',background:cfMode==='auto'?'#2563eb':'transparent',color:cfMode==='auto'?'#fff':'#1d4ed8',cursor:'pointer'}}>Tuần này</button>
+                      <button onClick={()=>setCFMode('manual')} style={{padding:'2px 8px',fontSize:'.66rem',fontWeight:800,border:'none',background:cfMode==='manual'?'#7c3aed':'transparent',color:cfMode==='manual'?'#fff':'#7c3aed',cursor:'pointer'}}>Chọn tuần</button>
+                    </div>
+                    {cfMode==='manual'?(
+                      <select className="inp inp-xs" style={{width:'auto',minWidth:110,padding:'2px 4px',fontSize:'.68rem'}} value={cfManualWeek} onChange={e=>setCFManualWeek(e.target.value)}>
+                        <option value="">-- Chọn --</option>
+                        {[...new Set(cashFlowData.map(r=>r.tuan).filter(t=>t&&String(t).trim()!==''))].map(w=><option key={w} value={w}>{w}</option>)}
+                      </select>
+                    ):(
+                      <span className="tag tb mono" style={{fontSize:'.66rem',padding:'1px 6px'}}>{getCurrentWeekLabel()}</span>
+                    )}
+                    {cashFlowData.length===0&&<span title="Chưa sync dữ liệu dòng tiền — vào tab Dòng Tiền nhấn Sync CF" style={{fontSize:'.62rem',color:'#b45309',fontWeight:700}}>⚠ chưa sync</span>}
+                  </div>
                 </div>
                 <div style={{display:'flex',gap:5,alignItems:'center'}}>
                   <button className="btn btn-ghost btn-xs" style={{background:'#eff6ff',border:'1px solid #93c5fd',color:'#1d4ed8'}}
