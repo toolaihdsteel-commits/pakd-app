@@ -193,8 +193,19 @@ const GSHEET_FLOOR_HISTORY="https://docs.google.com/spreadsheets/d/1iNyB0XTf3rqZ
 // MonthlyRevenue: CSV export trực tiếp từ sheet gid=478887656
 const GSHEET_MONTHLY_REVENUE="https://docs.google.com/spreadsheets/d/1iNyB0XTf3rqZyHcmujYuuKlXh6QXTQqr-LQ1f6IEGxU/export?format=csv&gid=478887656";
 const GSHEET_CASHFLOW="https://docs.google.com/spreadsheets/d/1iNyB0XTf3rqZyHcmujYuuKlXh6QXTQqr-LQ1f6IEGxU/export?format=csv&gid=127496102";
+// PO đã ký: tab gid=2015387961 — 1 dòng = 1 (PO × SKU)
+const GSHEET_PO="https://docs.google.com/spreadsheets/d/1iNyB0XTf3rqZyHcmujYuuKlXh6QXTQqr-LQ1f6IEGxU/export?format=csv&gid=2015387961";
 
 const skuKey=r=>`${r.alloy}|${r.temper}|${r.thickness}|${r.width}|${r.length}|${r.coating||'KP'}`;
+// Chuẩn hóa 1 thành phần kích thước để so khớp (vd "2.0"=="2"; "C"/"Coil"/"cuộn" => "C")
+const normDim=v=>{
+  const s=String(v==null?'':v).trim().toUpperCase();
+  if(s===''||s==='C'||s==='COIL'||s==='CUON'||s==='CUỘN') return 'C';
+  const f=parseFloat(s.replace(',','.'));
+  return isNaN(f)?s:String(f);
+};
+// Khóa SKU đã chuẩn hóa — dùng để khớp PO với tồn kho dù định dạng khác nhau ("2.0" vs "2")
+const skuKeyNorm=r=>`${String(r.alloy||'').trim().toUpperCase()}|${String(r.temper||'').trim().toUpperCase()}|${normDim(r.thickness)}|${normDim(r.width)}|${normDim(r.length)}|${(r.coating||'KP')}`;
 const skuLabel=r=>`${r.alloy} ${r.temper}  ${r.thickness}x${r.width}x${r.length} [${coatingShort(r.coating||'KP')}]`;
 
 const uid=()=>Date.now()+Math.random();
@@ -224,6 +235,44 @@ async function fetchCsv(url){
   const res=await fetch(url);
   if(!res.ok) throw new Error(`HTTP ${res.status}`);
   return parseCsv(await res.text());
+}
+// ── Parse dữ liệu PO đã ký (tab gid=2015387961) ──
+// Lấy giá trị theo nhiều biến thể tên cột (bỏ dấu, bỏ ký tự đặc biệt) cho linh hoạt
+const COMBINING=new RegExp('[\\u0300-\\u036f]','g');
+const stripVN=s=>String(s||'').normalize('NFD').replace(COMBINING,'').replace(/đ/g,'d').replace(/Đ/g,'D').toLowerCase().replace(/[^a-z0-9]/g,'');
+const poGet=(row,cands)=>{
+  // row keys đã được parseCsv hạ thấp & bỏ space; ta so khớp bằng stripVN cả 2 phía
+  const map={}; Object.keys(row).forEach(k=>{map[stripVN(k)]=row[k];});
+  for(const c of cands){const v=map[stripVN(c)];if(v!=null&&String(v).trim()!=='') return String(v).trim();}
+  return '';
+};
+const poNum=v=>{const f=parseFloat(String(v).replace(/[^0-9.\-]/g,''));return isNaN(f)?0:f;};
+function parsePOData(rows){
+  return rows.map(r=>{
+    const alloy=poGet(r,['Mác','Mac','alloy']).toUpperCase();
+    if(!alloy) return null;
+    const temper=poGet(r,['Temper']).toUpperCase();
+    const coatRaw=poGet(r,['Phủ','Phu','coating']);
+    const coating=(coatRaw.toUpperCase()==='1E'||coatRaw.toUpperCase()==='PE')?'1E':'KP';
+    const thickness=poGet(r,['Dày','Day','thickness']);
+    const width=poGet(r,['Rộng','Rong','width']);
+    const length=poGet(r,['Dài','Dai','length'])||'C';
+    const ordered=poNum(poGet(r,['TL đặt (kg)','TLđặt','TL đặt','ordered','tldat']));
+    const delivered=poNum(poGet(r,['TL đã giao (kg)','TLđãgiao','delivered','tldagiao']));
+    // Ưu tiên cột "Tồn chưa giao" (G). Nếu trống → fallback = đặt − đã giao (>=0)
+    const remRaw=poGet(r,['Tồn chưa giao (kg)','Tồnchưagiao','Tonchuagiao','remaining','tonchuagiao']);
+    let remaining=remRaw!==''?poNum(remRaw):Math.max(ordered-delivered,0);
+    if(remaining<0) remaining=0;
+    return {
+      supplier:poGet(r,['Nhà CC','NhaCC','supplier'])||'?',
+      po:poGet(r,['Số PO','SoPO','po'])||'?',
+      poDate:poGet(r,['Ngày PO','NgayPO','date']),
+      alloy,temper,coating,thickness,width,length,
+      ordered,delivered,remaining,
+      price:poNum(poGet(r,['Đơn giá (đ/kg)','Đơngiá','price'])),
+      key:skuKeyNorm({alloy,temper,thickness,width,length,coating}),
+    };
+  }).filter(Boolean);
 }
 // CashFlow là ma trận ngang (nhiều cột trùng tên) → cần CSV thô, không parse thành object
 async function fetchText(url){
@@ -384,7 +433,13 @@ const DEFAULT_MGMT_GROUPS=[
   {id:'g6',label:'A5052 (tất cả)',        alloy:'A5052',temper:'',minThick:0,maxThick:99},
 ];
 
-const calcMgmtGroups=(floorPriceData,groups,excludedSkus)=>{
+const calcMgmtGroups=(floorPriceData,groups,excludedSkus,poByKey,excludePOFloor)=>{
+  // qty hiệu dụng = totalQty − PO chưa giao (nếu bật loại bỏ PO), không âm
+  const effQ=(r)=>{
+    if(!excludePOFloor||!poByKey) return r.totalQty;
+    const rem=(poByKey[skuKeyNorm(r)]||{}).remaining||0;
+    return Math.max((r.totalQty||0)-rem,0);
+  };
   return groups.map(g=>{
     const excluded=(excludedSkus&&excludedSkus[g.id])||[];
     const matching=floorPriceData.filter(r=>{
@@ -396,9 +451,9 @@ const calcMgmtGroups=(floorPriceData,groups,excludedSkus)=>{
     // active = chưa bị loại
     const active=matching.filter(r=>!excluded.includes(r.skuKey));
     if(active.length===0) return{...g,skus:matching.length,activeSkus:0,totalQty:0,avgCost:0,avgNewImportPrice:0,avgFloor:0,avgCore:0,avgLoyal:0,avgNew:0,avgCompPrice:0,avgCompFloor:0};
-    const totalQty=active.reduce((s,r)=>s+r.totalQty,0);
+    const totalQty=active.reduce((s,r)=>s+effQ(r),0);
     const wa=(field)=>{
-      const tot=active.reduce((s,r)=>s+r.totalQty*(r[field]||0),0);
+      const tot=active.reduce((s,r)=>s+effQ(r)*(r[field]||0),0);
       return totalQty>0?tot/totalQty:0;
     };
     return{
@@ -1265,6 +1320,11 @@ const App=()=>{
   const [cashFlowData,setCashFlowData]=useState([]);
   const [cfMode,setCFMode]=useState('auto');
   const [cfManualWeek,setCFManualWeek]=useState('');
+  // PO đã ký
+  const [poData,setPoData]=useState([]);
+  const [poFilter,setPoFilter]=useState({supplier:'ALL',search:'',onlyShort:false});
+  const [excludePO,setExcludePO]=useState(false);          // tab Tồn kho: trừ TL PO chưa giao
+  const [excludePOFloor,setExcludePOFloor]=useState(false); // tab Giá sàn: trừ TL PO khỏi tính giá
 
   // ═══════════════════════════════════════════════════════
   // GITHUB CLOUD STORAGE - Lưu PA mua lên repo GitHub Private
@@ -1831,9 +1891,10 @@ const App=()=>{
       if(which==='all'||which==='uip') toFetch.push(wrap('uip',fetchCsv(GSHEET_UPDATED_IMPORT)));
       if(which==='all'||which==='fh') toFetch.push(wrap('fh',fetchCsv(GSHEET_FLOOR_HISTORY)));
       if(which==='all'||which==='cf') toFetch.push(wrap('cf',fetchText(GSHEET_CASHFLOW)));
+      if(which==='all'||which==='po') toFetch.push(wrap('po',fetchCsv(GSHEET_PO)));
       const results=await Promise.allSettled(toFetch);
       // Tên nguồn dễ hiểu để báo cáo rõ ràng thay vì "Lỗi" chung chung
-      const SRC_NAME={inv:'Tồn kho',ms:'Min/Max',lim:'Hạn mức',uip:'Giá nhập',fh:'Lịch sử Sàn',cf:'Dòng tiền'};
+      const SRC_NAME={inv:'Tồn kho',ms:'Min/Max',lim:'Hạn mức',uip:'Giá nhập',fh:'Lịch sử Sàn',cf:'Dòng tiền',po:'PO đã ký'};
       const okSrc=[]; const failSrc=[];
       results.forEach(r=>{
         const{type,data,err}=r.value||{};
@@ -1880,6 +1941,7 @@ const App=()=>{
           setAllRawImportPrices(rows);
         }
         if(type==='cf'){const parsed=parseCashFlowCSV(data);if(parsed.length>0)setCashFlowData(parsed);}
+        if(type==='po'){const parsed=parsePOData(data);setPoData(parsed);}
         if(type==='fh'){
           // Parse GSheet Lịch sử Sàn — map đúng 23 cột theo thứ tự header
           const gv2=(r,keys)=>{for(const k of keys){const norm=k.toLowerCase().replace(/\s+/g,'').replace(/[()đ%\/]/g,'');const v=Object.entries(r).find(([rk])=>rk.toLowerCase().replace(/\s+/g,'').replace(/[()đ%\/]/g,'')===norm);if(v&&v[1]!='') return v[1];}return '';};
@@ -2009,6 +2071,36 @@ const App=()=>{
   const reportData=useMemo(()=>calcAlloySummary(inventory,result?result.finPerKg:0,inputs,result?result.rows:[]),[inventory,result,inputs]);
   const limitsWarnings=useMemo(()=>calcLimitsWarnings(limitsData,inventory),[limitsData,inventory]);
 
+  // ── PO đã ký: gom tổng "chưa giao" theo SKU key chuẩn hóa ──
+  const poByKey=useMemo(()=>{
+    const m={};
+    poData.forEach(p=>{
+      if(!m[p.key]) m[p.key]={remaining:0,ordered:0,delivered:0,pos:[]};
+      m[p.key].remaining+=p.remaining||0;
+      m[p.key].ordered+=p.ordered||0;
+      m[p.key].delivered+=p.delivered||0;
+      m[p.key].pos.push(p);
+    });
+    return m;
+  },[poData]);
+  const poTotalRemaining=useMemo(()=>poData.reduce((s,p)=>s+(p.remaining||0),0),[poData]);
+  // Tồn kho hiện tại (IN_STOCK) + đang về (IN_TRANSIT) theo SKU key chuẩn hóa
+  const stockByKey=useMemo(()=>{
+    const m={};
+    inventory.forEach(r=>{
+      const k=skuKeyNorm(r); const q=parseFloat(r.qtyKg)||0;
+      if(!m[k]) m[k]={stock:0,transit:0};
+      if(String(r.status).toUpperCase()==='IN_TRANSIT') m[k].transit+=q; else m[k].stock+=q;
+    });
+    return m;
+  },[inventory]);
+  // PO làm giàu: mỗi dòng PO + đáp ứng kho/đang về + cần đặt thêm
+  const poEnriched=useMemo(()=>poData.map(p=>{
+    const st=stockByKey[p.key]||{stock:0,transit:0};
+    const needBuy=Math.max(p.remaining-st.stock-st.transit,0);
+    return {...p,inStock:st.stock,inTransit:st.transit,needBuy,coverStock:Math.min(st.stock,p.remaining),coverTransit:Math.max(Math.min(st.stock+st.transit,p.remaining)-st.stock,0)};
+  }),[poData,stockByKey]);
+
   const floorPriceData=useMemo(()=>{
     const skuGroups=groupBySku(inventory);
     return skuGroups.map(grp=>{
@@ -2046,7 +2138,7 @@ const App=()=>{
   },[floorHistory]);
 
   const mgmtData=useMemo(()=>{
-    const base=calcMgmtGroups(floorPriceData,mgmtGroups,excludedMgmtSkus);
+    const base=calcMgmtGroups(floorPriceData,mgmtGroups,excludedMgmtSkus,poByKey,excludePOFloor);
     return base.map(g=>{
       const ov=mgmtFloorOverride[g.id];
       // I.2: Default Sàn BH = Sàn trước nếu chưa nhập tay
@@ -2058,7 +2150,7 @@ const App=()=>{
       const newPrice=baseFloor*(1+(inputs.marginNew||2)/100);
       return{...g,publishedFloor,isDefaultFromHistory:ov==null&&!!lastHist,corePrice,loyalPrice,newPrice};
     });
-  },[floorPriceData,mgmtGroups,mgmtFloorOverride,excludedMgmtSkus,lastPublishedFloorByGroup,inputs.marginCore,inputs.marginLoyal,inputs.marginNew]);
+  },[floorPriceData,mgmtGroups,mgmtFloorOverride,excludedMgmtSkus,lastPublishedFloorByGroup,inputs.marginCore,inputs.marginLoyal,inputs.marginNew,poByKey,excludePOFloor]);
 
   const prevWeekImportPrices=useMemo(()=>filterPrevWeekUIP(allRawImportPrices),[allRawImportPrices]);
 
@@ -2511,6 +2603,7 @@ URL.revokeObjectURL(url);
             {k:'minstock',l:'📏 Min/Max'},
             {k:'floor',l:'💹 Giá Sàn'},
             {k:'cashflow',l:'💰 Dòng Tiền'},
+            {k:'po',l:poData.length>0?`📑 PO (${poData.length})`:'📑 PO đã ký'},
             {k:'scenario',l:'💾 Scenarios'},
             {k:'floorhistory',l:'🗓️ Lịch sử Sàn'},
             {k:'report',l:limitsWarnings.totalAlerts>0?`📈 BC ⚠${limitsWarnings.totalAlerts}`:'📈 Báo cáo'},
@@ -2778,6 +2871,9 @@ URL.revokeObjectURL(url);
                       const minRatio=minKg>0?curQtyAfter/minKg:null;
                       const isOverMax=maxKg!==null&&curQtyAfter>maxKg;
                       const minDelta=minKg>0?curQtyAfter-minKg:null;
+                      const poInfo=poByKey[skuKeyNorm(b)];
+                      const poRem=poInfo?poInfo.remaining:0;
+                      const poList=poInfo?[...new Set(poInfo.pos.map(x=>x.po))]:[];
                       return(
                       <div key={b.skuKey+i} className={`sku-card ${isOverMax?'alert-over':b.isRisk?'warn':b.stockStatus==='LOW'?'alert-low':''}`}>
                         
@@ -2796,6 +2892,7 @@ URL.revokeObjectURL(url);
                               :<span className="tag ts" style={{fontSize:'.7rem', padding:'3px 8px'}}>Chưa có giá</span>}
                             {isOverMax&&<span className="tag tp pulse" style={{fontSize:'.7rem', padding:'3px 8px'}}>🟣 QUÁ MAX</span>}
                             {!isOverMax&&b.stockStatus==='LOW'&&<span className="tag to pulse" style={{fontSize:'.7rem', padding:'3px 8px'}}><Ic.Alert/> THIẾU MIN</span>}
+                            {poRem>0&&<span className="tag" style={{fontSize:'.66rem',padding:'2px 7px',background:'#f3e8ff',color:'#6d28d9',border:'1px solid #d8b4fe',fontWeight:800}} title={'Đang nằm trong PO: '+poList.join(', ')}>📑 PO −{fv(poRem)}kg</span>}
                           </div>
                         </div>
                         
@@ -2969,11 +3066,28 @@ URL.revokeObjectURL(url);
             <div style={{maxWidth:'1200px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📦 Tồn kho chi tiết theo SKU + Coating</h2>
-                <div style={{display:'flex',gap:8}}>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <button className={`btn btn-sm ${excludePO?'btn-purple':'btn-ghost'}`} onClick={()=>setExcludePO(v=>!v)} disabled={poData.length===0} title={poData.length===0?'Cần Sync PO trước (tab 📑 PO đã ký)':'Trừ trọng lượng PO chưa giao khỏi tồn kho để ra Khả dụng hợp lý'} style={{border:excludePO?undefined:'1px solid #c4b5fd',color:excludePO?undefined:'#6d28d9'}}>
+                    {excludePO?'✓ Đang trừ PO':'➖ Loại bỏ SKU đã có PO'}
+                  </button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('inv')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
                   <button className="btn btn-ghost btn-sm" onClick={addInv}><Ic.Plus/> Thêm dòng</button>
                 </div>
               </div>
+              {excludePO&&poData.length>0&&(()=>{
+                const totStock=filteredInventory.reduce((s,r)=>s+(parseFloat(r.qtyKg)||0),0);
+                // PO chưa giao chỉ tính cho các SKU có mặt trong filteredInventory
+                const keysInView=new Set(filteredInventory.map(r=>skuKeyNorm(r)));
+                const poInView=Object.entries(poByKey).filter(([k])=>keysInView.has(k)).reduce((s,[,v])=>s+v.remaining,0);
+                const avail=totStock-poInView;
+                return(
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:11}}>
+                    {[{l:'Tổng tồn (lọc)',v:fv(totStock)+' kg',c:'#15803d'},{l:'PO chưa giao (trừ)',v:'− '+fv(poInView)+' kg',c:'#b45309'},{l:'Khả dụng hợp lý',v:fv(avail)+' kg',c:avail>=0?'#1d4ed8':'#b91c1c'}].map((x,i)=>(
+                      <div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'1rem'}}>{x.v}</div></div>
+                    ))}
+                  </div>
+                );
+              })()}
               <FilterBar filter={invFilter} setFilter={setInvFilter} alloys={uniqueInvAlloys} showStatus={true} showCoating={true} showStockAlert={true} total={inventory.length} filtered={filteredInventory.length}/>
               {/* Bộ lọc Giá vốn đ/kg */}
               <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:11,background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:6,padding:'7px 10px'}}>
@@ -3026,6 +3140,7 @@ URL.revokeObjectURL(url);
                   {filteredInventory.map((r,i)=>{
                     const k=skuKey(r),ms=minStockMap[k]||0;
                     const grpQty=inventory.filter(x=>skuKey(x)===k).reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0);
+                    const poRem=(poByKey[skuKeyNorm(r)]||{}).remaining||0;
                     const ratio=ms>0?grpQty/ms:null;const delta=ms>0?grpQty-ms:null;
                     const rowBg=ratio!==null&&ratio<0.8?'#fef2f2':ratio!==null&&ratio<1?'#fffbeb':'';
                     return(
@@ -3046,7 +3161,7 @@ URL.revokeObjectURL(url);
                         <td><input className="inp inp-xs mono" style={{textAlign:'right',fontWeight:600}} value={fv(r.avgCost)} onChange={e=>setInv(r.id,{avgCost:pn(e.target.value)})}/></td>
                         <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontSize:'.78rem',fontWeight:700}}>{fv((parseFloat(r.qtyKg)||0)*(parseFloat(r.avgCost)||0))}</td>
                         <td style={{textAlign:'center'}}>{ms>0?(<div><div style={{fontSize:'.63rem',color:ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#6d28d9':'#16a34a',fontWeight:800}}>{Math.round((ratio||0)*100)}%</div><div style={{fontSize:'.57rem',color:'#475569',fontWeight:600}}>{fv(ms)}</div></div>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}</td>
-                        <td style={{textAlign:'right',paddingRight:9}}>{delta!=null?(<span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲+':'▼'}{fv(Math.abs(delta))}</span>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}</td>
+                        <td style={{textAlign:'right',paddingRight:9}}>{delta!=null?(<span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲+':'▼'}{fv(Math.abs(delta))}</span>):<span style={{color:'#64748b',fontSize:'.63rem'}}>—</span>}{excludePO&&poRem>0&&<div className="mono" style={{fontSize:'.58rem',color:'#7c3aed',fontWeight:800,marginTop:2}}>PO −{fv(poRem)} → KD {fv(grpQty-poRem)}</div>}</td>
                         <td style={{textAlign:'center',padding:'4px 6px',fontSize:'.75rem',fontWeight:500,color:'#334155'}}>{r.expectedDeliveryDate||'—'}</td>
                         <td><button className="btn-danger" onClick={()=>delInv(r.id)}><Ic.X/></button></td>
                       </tr>
@@ -3343,6 +3458,7 @@ URL.revokeObjectURL(url);
                     </div>
                     <div style={{display:'flex',gap:6,flexShrink:0,alignItems:'center'}}>
                       <button className="btn btn-ghost btn-xs" style={{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c'}} onClick={()=>setExcludedMgmtSkus({})} title="Reset: tính lại tất cả SKUs vào giá sàn chung">🔄 Reset bỏ SKU</button>
+                      <button className={`btn btn-xs ${excludePOFloor?'btn-purple':'btn-ghost'}`} onClick={()=>setExcludePOFloor(v=>!v)} disabled={poData.length===0} title={poData.length===0?'Cần Sync PO trước (tab 📑 PO đã ký)':'Trừ trọng lượng PO chưa giao khỏi khối lượng tính giá sàn'} style={{border:excludePOFloor?undefined:'1px solid #c4b5fd',color:excludePOFloor?undefined:'#6d28d9'}}>{excludePOFloor?'✓ Đang trừ PO':'➖ Trừ TL có PO'}</button>
                       <button className="btn btn-teal btn-sm" onClick={()=>exportFloorCSV(null)}>⬇️ Xuất Excel/CSV</button>
                       <div style={{display:'flex',alignItems:'center',gap:4,background:'#f3e8ff',border:'1px solid #d8b4fe',borderRadius:5,padding:'3px 7px'}}>
                         <span style={{fontSize:'.67rem',color:'#6d28d9',fontWeight:800,whiteSpace:'nowrap'}}>👤 Người lập PDF:</span>
@@ -4323,6 +4439,97 @@ URL.revokeObjectURL(url);
         )}
 
         {tab==='cashflow'&&<CashFlowTab result={result} inputs={inputs} cashFlowData={cashFlowData} cfMode={cfMode} setCFMode={setCFMode} cfManualWeek={cfManualWeek} setCFManualWeek={setCFManualWeek} limitsData={limitsData} syncGoogleSheet={syncGoogleSheet} dbStatus={dbStatus} ghVerified={ghVerified} bg1={bg1} bg2={bg2} border1={border1} border2={border2}/>}
+
+        {/* ════ TAB PO ĐÃ KÝ ════ */}
+        {tab==='po'&&(
+          <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+            <div style={{maxWidth:'1200px',margin:'0 auto'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:8}}>
+                <div>
+                  <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📑 Quản lý PO đã ký</h2>
+                  <p style={{fontSize:'.72rem',color:'#475569',fontWeight:600,marginTop:2}}>SKU đang ở PO nào · kho đáp ứng · đang về · còn thiếu cần đặt (GSheet gid=2015387961)</p>
+                </div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('po')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync PO</button>
+                  {poData.length===0?<span className="tag tr pulse">⚠ Chưa có dữ liệu – nhấn Sync</span>:<span className="tag tg">✓ {poData.length} dòng PO</span>}
+                </div>
+              </div>
+
+              {poData.length>0&&(()=>{
+                const list=poEnriched.filter(p=>{
+                  if(poFilter.supplier!=='ALL'&&p.supplier!==poFilter.supplier) return false;
+                  if(poFilter.onlyShort&&p.needBuy<=0) return false;
+                  if(poFilter.search){const s=poFilter.search.toLowerCase();const lbl=`${p.po} ${p.alloy} ${p.temper} ${p.thickness} ${p.width} ${p.length}`.toLowerCase();if(!lbl.includes(s)) return false;}
+                  return true;
+                });
+                const sumRemain=list.reduce((s,p)=>s+p.remaining,0);
+                const sumNeed=list.reduce((s,p)=>s+p.needBuy,0);
+                const suppliers=[...new Set(poData.map(p=>p.supplier))];
+                // group by PO
+                const groups={};list.forEach(p=>{(groups[p.po]=groups[p.po]||[]).push(p);});
+                return(
+                  <>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
+                      {[
+                        {l:'Số PO',v:[...new Set(list.map(p=>p.po))].length,c:'#1d4ed8'},
+                        {l:'Dòng SKU',v:list.length,c:'#0369a1'},
+                        {l:'Tổng còn thiếu (kg)',v:fv(sumRemain),c:'#b45309'},
+                        {l:'Cần đặt thêm (kg)',v:fv(sumNeed),c:sumNeed>0?'#b91c1c':'#15803d'},
+                      ].map((x,i)=><div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'1rem'}}>{x.v}</div></div>)}
+                    </div>
+                    <div className="card" style={{marginBottom:12,padding:'8px 12px',display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+                      <span style={{fontSize:'.72rem',fontWeight:800,color:'#334155'}}>Lọc:</span>
+                      <select className="inp inp-xs" style={{width:'auto'}} value={poFilter.supplier} onChange={e=>setPoFilter(p=>({...p,supplier:e.target.value}))}>
+                        <option value="ALL">Tất cả NCC</option>
+                        {suppliers.map(s=><option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <input className="inp inp-xs" style={{width:200}} placeholder="🔍 Tìm PO / mác / quy cách..." value={poFilter.search} onChange={e=>setPoFilter(p=>({...p,search:e.target.value}))}/>
+                      <label style={{display:'flex',alignItems:'center',gap:5,fontSize:'.72rem',fontWeight:700,color:'#b91c1c',cursor:'pointer'}}>
+                        <input type="checkbox" checked={poFilter.onlyShort} onChange={e=>setPoFilter(p=>({...p,onlyShort:e.target.checked}))}/> Chỉ hiện SKU cần đặt thêm
+                      </label>
+                    </div>
+                    {Object.keys(groups).length===0?(
+                      <div className="card" style={{textAlign:'center',padding:30,color:'#64748b',fontWeight:600}}>Không có dòng PO khớp bộ lọc.</div>
+                    ):Object.entries(groups).map(([po,items])=>(
+                      <div key={po} className="card" style={{marginBottom:10,padding:0,overflow:'hidden'}}>
+                        <div style={{background:'#eff6ff',borderBottom:'1px solid #bfdbfe',padding:'7px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                          <div style={{fontWeight:900,fontSize:'.84rem',color:'#1e40af'}}>📄 {po} <span style={{fontSize:'.66rem',fontWeight:700,color:'#475569'}}>· {items[0].supplier}{items[0].poDate?` · ${items[0].poDate}`:''}</span></div>
+                          <span className="tag tb" style={{fontSize:'.66rem'}}>{items.length} SKU · còn thiếu {fv(items.reduce((s,p)=>s+p.remaining,0))} kg</span>
+                        </div>
+                        <table className="tbl" style={{fontSize:'.72rem'}}>
+                          <thead><tr>
+                            <th style={{textAlign:'left'}}>SKU</th><th>TL đặt</th><th>Đã giao</th><th>Còn thiếu</th><th>Kho đáp ứng</th><th>Đang về</th><th>Cần đặt thêm</th>
+                          </tr></thead>
+                          <tbody>
+                            {items.map((p,i)=>(
+                              <tr key={i} style={p.needBuy>0?{background:'#fff7ed'}:{}}>
+                                <td style={{textAlign:'left'}}><div style={{fontWeight:700}}>{p.alloy} {p.temper} <span style={{fontSize:'.6rem',color:(p.coating==='1E')?'#0f766e':'#a16207',fontWeight:800}}>[{p.coating==='1E'?'PE':'NOPE'}]</span></div><div style={{fontSize:'.6rem',color:'#64748b',fontFamily:'JetBrains Mono'}}>{p.thickness}×{p.width}×{p.length}</div></td>
+                                <td className="mono" style={{textAlign:'right'}}>{fv(p.ordered)}</td>
+                                <td className="mono" style={{textAlign:'right',color:'#15803d'}}>{fv(p.delivered)}</td>
+                                <td className="mono" style={{textAlign:'right',fontWeight:800,color:p.remaining>0?'#b45309':'#64748b'}}>{fv(p.remaining)}</td>
+                                <td className="mono" style={{textAlign:'right',color:'#16a34a'}}>{fv(p.coverStock)}</td>
+                                <td className="mono" style={{textAlign:'right',color:'#d97706'}}>{fv(p.coverTransit)}</td>
+                                <td className="mono" style={{textAlign:'right',fontWeight:900,color:p.needBuy>0?'#b91c1c':'#15803d'}}>{p.needBuy>0?'⚠ '+fv(p.needBuy):'✓ đủ'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+
+              {poData.length===0&&(
+                <div className="card" style={{textAlign:'center',padding:44}}>
+                  <div style={{fontSize:'2rem',marginBottom:8}}>📑</div>
+                  <div style={{color:'#64748b',fontWeight:700}}>Chưa có dữ liệu PO</div>
+                  <div style={{color:'#94a3b8',fontSize:'.75rem',marginTop:4}}>Nhập dữ liệu vào tab Gsheet (gid=2015387961) rồi nhấn <strong>Sync PO</strong>.</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {result&&(
@@ -4333,7 +4540,7 @@ URL.revokeObjectURL(url);
             <div className="print-section-title">I. Thông số</div>
             <div className="print-grid-4">
               <div className="print-box"><div className="print-box-title">Tỷ giá USD</div><div className="print-box-value">{fv(inputs.exchangeRate)}</div></div>
-              <div className="print-box"><div className="print-box-title">Hệ số QL %</div><div className="print-box-value" style={{fontSize:'12pt',color:'#6d28d9'}}>{inputs.managementFee}%</div></div>
+              <div className="print-box"><div className="print-box-title">CP về kho %</div><div className="print-box-value" style={{fontSize:'12pt',color:'#6d28d9'}}>{inputs.managementFee}%</div></div>
               <div className="print-box"><div className="print-box-title">Thanh toán</div><div className="print-box-value text-blue">{inputs.paymentMethod}</div></div>
               <div className="print-box"><div className="print-box-title">Tổng khối lượng</div><div className="print-box-value text-green">{fv(result.totalKg)} kg</div></div>
             </div>
@@ -4507,9 +4714,9 @@ URL.revokeObjectURL(url);
             </div>
           )}
           <div style={{display:'flex',justifyContent:'space-around',marginTop:'40px',textAlign:'center',pageBreakInside:'avoid'}}>
-            <div><strong>Lập bảng</strong><br/><br/><br/><br/><span>{inputs.creator}</span></div>
-            <div><strong>Trưởng Phòng</strong><br/><br/><br/><br/><span>Ký tên</span></div>
-            <div><strong>Giám Đốc Duyệt</strong><br/><br/><br/><br/><span>Ký tên</span></div>
+            <div style={{width:'28%'}}><strong>Lập bảng</strong><div style={{fontSize:'9pt',fontStyle:'italic',color:'#555'}}>(Ký, ghi rõ họ tên)</div><br/><br/><br/><br/><div style={{borderTop:'1px dotted #000',width:'80%',margin:'0 auto'}}/></div>
+            <div style={{width:'28%'}}><strong>Trưởng Phòng</strong><div style={{fontSize:'9pt',fontStyle:'italic',color:'#555'}}>(Ký, ghi rõ họ tên)</div><br/><br/><br/><br/><div style={{borderTop:'1px dotted #000',width:'80%',margin:'0 auto'}}/></div>
+            <div style={{width:'28%'}}><strong>Giám Đốc Duyệt</strong><div style={{fontSize:'9pt',fontStyle:'italic',color:'#555'}}>(Ký, ghi rõ họ tên)</div><br/><br/><br/><br/><div style={{borderTop:'1px dotted #000',width:'80%',margin:'0 auto'}}/></div>
           </div>
         </div>
       )}
@@ -4773,6 +4980,7 @@ URL.revokeObjectURL(url);
   );
 };
 
+/* PAKD 7.1 — PO module */
 ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App/></ErrorBoundary>);
 </script>
 </body>
