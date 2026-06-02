@@ -206,6 +206,15 @@ const normDim=v=>{
 };
 // Khóa SKU đã chuẩn hóa — dùng để khớp PO với tồn kho dù định dạng khác nhau ("2.0" vs "2")
 const skuKeyNorm=r=>`${String(r.alloy||'').trim().toUpperCase()}|${String(r.temper||'').trim().toUpperCase()}|${normDim(r.thickness)}|${normDim(r.width)}|${normDim(r.length)}|${(r.coating||'KP')}`;
+// Chuẩn hóa ĐỘ DÀY: số nguyên tự thêm ".0" (1→"1.0", 2→"2.0"), giữ nguyên số lẻ (0.33, 2.5).
+// Dùng cho cả dữ liệu copy-paste từ GSheet lẫn nhập tay, để người nhập không phải gõ ".0".
+const normThick=v=>{
+  const s=String(v==null?'':v).trim().replace(',','.');
+  if(s==='') return '';
+  const f=parseFloat(s);
+  if(isNaN(f)) return s;                 // giữ nguyên nếu không phải số
+  return Number.isInteger(f)?f.toFixed(1):String(f);  // 2 → "2.0", 0.33 → "0.33"
+};
 const skuLabel=r=>`${r.alloy} ${r.temper}  ${r.thickness}x${r.width}x${r.length} [${coatingShort(r.coating||'KP')}]`;
 
 const uid=()=>Date.now()+Math.random();
@@ -254,7 +263,7 @@ function parsePOData(rows){
     const temper=poGet(r,['Temper']).toUpperCase();
     const coatRaw=poGet(r,['Phủ','Phu','coating']);
     const coating=(coatRaw.toUpperCase()==='1E'||coatRaw.toUpperCase()==='PE')?'1E':'KP';
-    const thickness=poGet(r,['Dày','Day','thickness']);
+    const thickness=normThick(poGet(r,['Dày','Day','thickness']));
     const width=poGet(r,['Rộng','Rong','width']);
     const length=poGet(r,['Dài','Dai','length'])||'C';
     const ordered=poNum(poGet(r,['TL đặt (kg)','TLđặt','TL đặt','ordered','tldat']));
@@ -758,7 +767,7 @@ const SkuSel=({row,onChange,showCoating=true})=>{
       <input list="alloy-list" className="inp inp-xs font-bold" style={{width:76}} value={row.alloy} onChange={e=>S('alloy',e.target.value)} placeholder="Mác"/>
       <input list="temper-list" className="inp inp-xs font-semibold" style={{width:58,color:'#2563eb'}} value={row.temper} onChange={e=>S('temper',e.target.value)} placeholder="Cứng"/>
       <span style={{color:'#334155',fontSize:'.8rem',fontWeight:'bold',flexShrink:0}}>•</span>
-      <input list="thick-list" className="inp inp-xs font-semibold" style={{width:65,color:'#b45309'}} value={row.thickness} onChange={e=>S('thickness',e.target.value)} placeholder="Dày"/>
+      <input list="thick-list" className="inp inp-xs font-semibold" style={{width:65,color:'#b45309'}} value={row.thickness} onChange={e=>S('thickness',e.target.value)} onBlur={e=>S('thickness',normThick(e.target.value))} placeholder="Dày" title="Số nguyên sẽ tự thêm .0 (vd 2 → 2.0)"/>
       <span style={{color:'#334155',fontSize:'.8rem',fontWeight:'bold',flexShrink:0}}>x</span>
       <input list="width-list" className="inp inp-xs font-semibold" style={{width:60,color:'#b45309'}} value={row.width} onChange={e=>S('width',e.target.value)} placeholder="Rộng"/>
       <span style={{color:'#334155',fontSize:'.8rem',fontWeight:'bold',flexShrink:0}}>x</span>
@@ -1922,11 +1931,11 @@ const App=()=>{
         if(err||!data){failSrc.push(SRC_NAME[type]||type||'?');return;}
         okSrc.push(SRC_NAME[type]||type);
         if(type==='inv'){
-          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:r.thickness||'1.0',width:r.width||'1200',length:r.length||'C',coating:coatingFromGSheet(r.coating||'KP'),status:(r.status||'IN_STOCK').toUpperCase(),qtyKg:parseFloat(r.qtykg||r.qty_kg||r['qty kg']||0),avgCost:parseFloat(r.avgcost||r.avg_cost||r['avg cost']||0),expectedDeliveryDate:(r.expecteddeliverydate||r.expected_delivery_date||r['expecteddeliverydate']||r['expected delivery date']||'').trim()}));
+          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:normThick(r.thickness)||'1.0',width:r.width||'1200',length:r.length||'C',coating:coatingFromGSheet(r.coating||'KP'),status:(r.status||'IN_STOCK').toUpperCase(),qtyKg:parseFloat(r.qtykg||r.qty_kg||r['qty kg']||0),avgCost:parseFloat(r.avgcost||r.avg_cost||r['avg cost']||0),expectedDeliveryDate:(r.expecteddeliverydate||r.expected_delivery_date||r['expecteddeliverydate']||r['expected delivery date']||'').trim()}));
           if(rows.length>0) setInvs(rows);
         }
         if(type==='ms'){
-          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:r.thickness||'1.0',width:r.width||'1200',length:r.length||'Coil',coating:coatingFromGSheet(r.coating||'KP'),minStockKg:parseFloat(r.minstockkg||r.min_stock_kg||r['min stock kg']||0),maxStockKg:(()=>{const raw=r.maxstockkg||r.max_stock_kg||r['max stock kg']||'';return raw===''?null:parseFloat(raw)||null;})(),buyRequest:(r.yeucaumua||r['yeu cau mua']||r.yeu_cau_mua||'').trim(),buyRequestWeek:(r.tuanyeucau||r['tuan yeu cau']||r.tuan_yeu_cau||'').trim()}));
+          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:normThick(r.thickness)||'1.0',width:r.width||'1200',length:r.length||'Coil',coating:coatingFromGSheet(r.coating||'KP'),minStockKg:parseFloat(r.minstockkg||r.min_stock_kg||r['min stock kg']||0),maxStockKg:(()=>{const raw=r.maxstockkg||r.max_stock_kg||r['max stock kg']||'';return raw===''?null:parseFloat(raw)||null;})(),buyRequest:(r.yeucaumua||r['yeu cau mua']||r.yeu_cau_mua||'').trim(),buyRequestWeek:(r.tuanyeucau||r['tuan yeu cau']||r.tuan_yeu_cau||'').trim()}));
           if(rows.length>0) setMinStockRows(rows);
         }
         if(type==='lim'){
