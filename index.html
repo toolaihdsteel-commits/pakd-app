@@ -768,6 +768,25 @@ const SkuSel=({row,onChange,showCoating=true})=>{
   );
 };
 
+// Hiển thị SKU gọn, RÕ kích thước, dễ đọc cho người lớn tuổi — KHÔNG nhập tay
+const SkuLabelCell=({row,size='md'})=>{
+  const lenTxt=(()=>{const l=String(row.length||'').trim().toUpperCase();return (l===''||l==='C'||l==='COIL'||l==='CUON'||l==='CUỘN')?'cuộn':l;})();
+  const isPE=(row.coating||'KP')==='1E';
+  const big=size==='lg';
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:1,lineHeight:1.15}}>
+      <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+        <span style={{fontWeight:900,fontSize:big?'1rem':'.9rem',color:'#0f172a'}}>{row.alloy}</span>
+        <span style={{fontWeight:800,fontSize:big?'.85rem':'.78rem',color:'#2563eb'}}>{row.temper}</span>
+        <span style={{fontSize:'.62rem',fontWeight:800,padding:'1px 6px',borderRadius:4,background:isPE?'#ccfbf1':'#fef3c7',color:isPE?'#0f766e':'#a16207',border:`1px solid ${isPE?'#5eead4':'#fcd34d'}`}}>{isPE?'PE':'NOPE'}</span>
+      </div>
+      <div style={{fontFamily:'JetBrains Mono',fontSize:big?'.84rem':'.78rem',fontWeight:700,color:'#334155',letterSpacing:'.01em'}}>
+        {row.thickness}<span style={{color:'#94a3b8',margin:'0 3px'}}>×</span>{row.width}<span style={{color:'#94a3b8',margin:'0 3px'}}>×</span>{lenTxt}<span style={{color:'#64748b',fontSize:'.62rem',fontWeight:600,marginLeft:4}}>(mm)</span>
+      </div>
+    </div>
+  );
+};
+
 const LimitBar=({actual,limit,label,unit='đ'})=>{
   if(!limit||limit<=0) return(
     <div>
@@ -1306,7 +1325,7 @@ const App=()=>{
   const [allRawImportPrices,setAllRawImportPrices]=useState(defUpdatedImport); // unfiltered for prev-week calc
   const [scenarios,setScenarios]=useState(()=>{try{const s=localStorage.getItem('pakd_scenarios');return s?JSON.parse(s):[];}catch(e){return [];}});
   const [invFilter,setInvFilter]=useState({status:'ALL',alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:'',costMin:'',costMax:''});
-  const [msFilter,setMsFilter]=useState({alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:''});
+  const [msFilter,setMsFilter]=useState({alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:'',onlyBuyReq:false});
   const [spFilter,setSpFilter]=useState({alloy:'ALL',coating:'ALL',search:''});
   const [fpFilter,setFpFilter]=useState({alloy:'ALL',coating:'ALL',search:'',thickMin:'',thickMax:''});
   const [fpView,setFpView]=useState('detail');
@@ -1907,7 +1926,7 @@ const App=()=>{
           if(rows.length>0) setInvs(rows);
         }
         if(type==='ms'){
-          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:r.thickness||'1.0',width:r.width||'1200',length:r.length||'Coil',coating:coatingFromGSheet(r.coating||'KP'),minStockKg:parseFloat(r.minstockkg||r.min_stock_kg||r['min stock kg']||0),maxStockKg:(()=>{const raw=r.maxstockkg||r.max_stock_kg||r['max stock kg']||'';return raw===''?null:parseFloat(raw)||null;})()}));
+          const rows=data.filter(r=>r.alloy).map((r,i)=>({id:uid()+i,alloy:r.alloy||'A5052',temper:r.temper||'H32',thickness:r.thickness||'1.0',width:r.width||'1200',length:r.length||'Coil',coating:coatingFromGSheet(r.coating||'KP'),minStockKg:parseFloat(r.minstockkg||r.min_stock_kg||r['min stock kg']||0),maxStockKg:(()=>{const raw=r.maxstockkg||r.max_stock_kg||r['max stock kg']||'';return raw===''?null:parseFloat(raw)||null;})(),buyRequest:(r.yeucaumua||r['yeu cau mua']||r.yeu_cau_mua||'').trim(),buyRequestWeek:(r.tuanyeucau||r['tuan yeu cau']||r.tuan_yeu_cau||'').trim()}));
           if(rows.length>0) setMinStockRows(rows);
         }
         if(type==='lim'){
@@ -2548,8 +2567,10 @@ URL.revokeObjectURL(url);
       if(msFilter.stockAlert==='EXCESS'&&!(ratio!==null&&ratio>2&&!isOver)) return false;
       if(msFilter.stockAlert==='OVER'&&!isOver) return false;
     }
+    if(msFilter.onlyBuyReq&&!(String(r.buyRequest||'').trim()!=='')) return false;
     return true;
   }),[minStockRows,msFilter,inventory]);
+  const msBuyReqCount=useMemo(()=>minStockRows.filter(r=>String(r.buyRequest||'').trim()!=='').length,[minStockRows]);
 
   const filteredSP=useMemo(()=>sellingPrices.filter(r=>{
     if(spFilter.alloy!=='ALL'&&(r.alloy||'')!==spFilter.alloy) return false;
@@ -3167,10 +3188,10 @@ URL.revokeObjectURL(url);
               {dbStatus.error&&<div style={{background:'#fee2e2',border:'1px solid #fca5a5',borderRadius:6,padding:'9px 13px',marginBottom:13,fontSize:'.78rem',color:'#b91c1c',fontWeight:700}}><Ic.Alert/> {dbStatus.error}</div>}
               <table className="tbl" style={{background:bg2,borderRadius:8,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
                 <thead>
-                  <tr><th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th style={{width:72}}>Coating</th><th style={{width:90}}>Status</th><th style={{width:95}}>KL kg</th><th style={{width:105}}>Giá vốn đ/kg</th><th style={{width:115}}>Tổng Vốn VND</th><th style={{width:75}}>MinStock</th><th style={{width:115}}>Thiếu/Dư kg</th><th style={{width:100}}>Dự Kiến</th><th style={{width:28}}></th></tr>
+                  <tr><th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th style={{width:90}}>Status</th><th style={{width:95}}>KL kg</th><th style={{width:105}}>Giá vốn đ/kg</th><th style={{width:115}}>Tổng Vốn VND</th><th style={{width:75}}>MinStock</th><th style={{width:115}}>Thiếu/Dư kg</th><th style={{width:100}}>Dự Kiến</th><th style={{width:28}}></th></tr>
                   {/* III.1: Summary row at top */}
                   <tr style={{background:'#e2e8f0'}}>
-                    <td colSpan={4} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredInventory.length} dòng){excludePO&&poData.length>0&&<span style={{color:'#7c3aed',marginLeft:4}}>· đã trừ PO</span>}</td>
+                    <td colSpan={3} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredInventory.length} dòng){excludePO&&poData.length>0&&<span style={{color:'#7c3aed',marginLeft:4}}>· đã trừ PO</span>}</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#15803d',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0)),0))} kg</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#475569',fontWeight:800,fontSize:'.8rem'}}>{fv(weightedAvg(filteredInventory.map(r=>({qtyKg:excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0),avgCost:parseFloat(r.avgCost)||0}))))} avg</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#1d4ed8',fontWeight:800,fontSize:'.8rem'}}>{fv(filteredInventory.reduce((s,r)=>s+(excludePO?(invAlloc[r.id]?invAlloc[r.id].available:(parseFloat(r.qtyKg)||0)):(parseFloat(r.qtyKg)||0))*(parseFloat(r.avgCost)||0),0))}</td>
@@ -3192,8 +3213,7 @@ URL.revokeObjectURL(url);
                     return(
                       <tr key={r.id} style={{background:rowBg}}>
                         <td style={{textAlign:'center',color:'#64748b',fontSize:'.72rem',fontWeight:700}} className="mono">{i+1}</td>
-                        <td style={{paddingLeft:5,minWidth:330}}><SkuSel row={r} onChange={patch=>setInv(r.id,patch)} showCoating={false}/></td>
-                        <td style={{textAlign:'center'}}><button onClick={()=>setInv(r.id,{coating:r.coating==='1E'?'KP':'1E'})} className={`status-btn ${r.coating==='1E'?'s-coated':'s-plain'} off`} style={{padding:'2px 7px',fontSize:'.63rem',width:'100%'}}>{r.coating==='1E'?'🎨 PE':'⬜ NOPE'}</button></td>
+                        <td style={{paddingLeft:8,minWidth:200}}><SkuLabelCell row={r}/></td>
                         {/* III.2: Single status button — show only current state, click to toggle */}
                         <td style={{textAlign:'center'}}>
                           <button
@@ -3233,26 +3253,35 @@ URL.revokeObjectURL(url);
           <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1060px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-                <div><h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📏 Min/Max Stock per SKU</h2><p style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginTop:3}}>Ô trống maxstockkg = không giới hạn (∞)</p></div>
+                <div><h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📏 Min/Max Stock per SKU</h2><p style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginTop:3}}>Ô trống maxstockkg = không giới hạn (∞) · Đề xuất mua do TP Kinh doanh nhập trên GSheet</p></div>
                 <div style={{display:'flex',gap:8}}>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('ms')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
                   <button className="btn btn-ghost btn-sm" onClick={addMS}><Ic.Plus/> Thêm SKU</button>
                 </div>
               </div>
               <FilterBar filter={msFilter} setFilter={setMsFilter} alloys={uniqueMsAlloys} showStatus={false} showCoating={true} showStockAlert={true} showOverAlert={false} total={minStockRows.length} filtered={filteredMs.length}/>
+              {/* Lọc đề xuất mua chưa giải quyết */}
+              <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:11,background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'7px 12px'}}>
+                <span style={{fontSize:'.72rem',fontWeight:800,color:'#92400e'}}>🛒 Đề xuất mua:</span>
+                {msBuyReqCount>0?<span className="tag" style={{background:'#fef3c7',color:'#92400e',border:'1px solid #fcd34d',fontWeight:800}}>{msBuyReqCount} mã chưa giải quyết</span>:<span style={{fontSize:'.72rem',color:'#15803d',fontWeight:700}}>✓ Không có đề xuất nào đang chờ</span>}
+                <label style={{display:'flex',alignItems:'center',gap:5,fontSize:'.72rem',fontWeight:700,color:'#b45309',cursor:'pointer',marginLeft:'auto'}}>
+                  <input type="checkbox" checked={msFilter.onlyBuyReq} onChange={e=>setMsFilter(f=>({...f,onlyBuyReq:e.target.checked}))}/> Chỉ hiện mã có đề xuất mua
+                </label>
+                <span style={{fontSize:'.62rem',color:'#92400e',fontWeight:600}}>TP duyệt xong → xóa ở GSheet (cột yeucaumua, tuanyeucau) rồi Sync</span>
+              </div>
               <table className="tbl" style={{background:bg2,borderRadius:8,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
                 <thead>
                   <tr>
-                    <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th>Coating</th><th>Min Stock kg</th><th>Max Stock kg</th><th>Tồn hiện tại kg</th><th>% đạt min</th><th>Thiếu / Dư kg</th><th>Trạng thái</th><th></th>
+                    <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th>Min Stock kg</th><th>Max Stock kg</th><th>Tồn hiện tại kg</th><th>% đạt min</th><th>Thiếu / Dư kg</th><th style={{background:'#fffbeb',color:'#92400e'}}>🛒 Đề xuất mua</th><th style={{background:'#fffbeb',color:'#92400e'}}>Tuần đề xuất</th><th></th>
                   </tr>
                   <tr style={{background:'#e2e8f0'}}>
-                    <td colSpan={3} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredMs.length} dòng)</td>
+                    <td colSpan={2} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredMs.length} dòng)</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#7c3aed',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalMin)} kg min</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#6d28d9',fontWeight:800,fontSize:'.8rem'}}>{filtMsTotalMax>0?fv(filtMsTotalMax)+' kg max':'—'}</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalKg)} kg</td>
                     <td/>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,fontWeight:900,color:filtMsDelta>=0?'#15803d':'#b91c1c',fontSize:'.8rem'}}>{filtMsDelta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(filtMsDelta))} kg</td>
-                    <td colSpan={2}/>
+                    <td colSpan={3}/>
                   </tr>
                 </thead>
                 <tbody>
@@ -3261,19 +3290,18 @@ URL.revokeObjectURL(url);
                     const curQty=grp?[...grp.inStock,...grp.inTransit].reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
                     const ratio=r.minStockKg>0?curQty/r.minStockKg:null;const mx=r.maxStockKg;
                     const isOver=mx!==null&&mx>0&&curQty>mx;const delta=r.minStockKg>0?curQty-r.minStockKg:null;
-                    const status=isOver?'QUÁ MAX':ratio===null?'—':ratio<0.8?'THIẾU':ratio<1?'GẦN MIN':ratio>2?'DƯ':'OK';
-                    const statusColor=isOver?'#6d28d9':ratio===null?'#475569':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a';
+                    const hasReq=String(r.buyRequest||'').trim()!=='';
                     return(
-                      <tr key={r.id} style={{background:isOver?'#faf5ff':ratio!==null&&ratio<0.8?'#fef2f2':ratio!==null&&ratio<1?'#fffbeb':''}}>
+                      <tr key={r.id} style={{background:hasReq?'#fffbeb':isOver?'#faf5ff':ratio!==null&&ratio<0.8?'#fef2f2':ratio!==null&&ratio<1?'#fffef5':''}}>
                         <td style={{textAlign:'center',color:'#64748b',fontSize:'.75rem',fontWeight:700}} className="mono">{i+1}</td>
-                        <td style={{paddingLeft:5,minWidth:380}}><SkuSel row={r} onChange={patch=>setMS(r.id,patch)} showCoating={false}/></td>
-                        <td style={{width:80,textAlign:'center'}}><button onClick={()=>setMS(r.id,{coating:r.coating==='1E'?'KP':'1E'})} className={`status-btn ${r.coating==='1E'?'s-coated':'s-plain'} off`} style={{padding:'2px 6px',fontSize:'.65rem',width:'100%'}}>{r.coating==='1E'?'🎨 PE':'⬜ NOPE'}</button></td>
+                        <td style={{paddingLeft:8,minWidth:210}}><SkuLabelCell row={r}/></td>
                         <td style={{width:120}}><input className="inp inp-xs mono" style={{textAlign:'right',color:'#7c3aed',fontWeight:800}} value={fv(r.minStockKg)} onChange={e=>setMS(r.id,{minStockKg:pn(e.target.value)})}/></td>
                         <td style={{width:120}}><input className="inp inp-xs mono" style={{textAlign:'right',color:'#6d28d9',fontWeight:800}} value={r.maxStockKg===null||r.maxStockKg===undefined?'':fv(r.maxStockKg)} onChange={e=>{const v=e.target.value.trim();setMS(r.id,{maxStockKg:v===''?null:pn(v)});}} placeholder="∞ không giới hạn"/></td>
                         <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontSize:'.82rem',fontWeight:700}}>{fv(curQty)}</td>
-                        <td style={{textAlign:'center',width:90}}>{ratio!==null?(<div><div className="stock-bar" style={{height:5,margin:'0 8px 2px'}}><div className="stock-bar-fill" style={{width:`${Math.min((ratio/2.5)*100,100)}%`,background:statusColor}}/></div><span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:statusColor}}>{Math.round(ratio*100)}%</span></div>):<span style={{color:'#64748b'}}>—</span>}</td>
+                        <td style={{textAlign:'center',width:90}}>{ratio!==null?(<div><div className="stock-bar" style={{height:5,margin:'0 8px 2px'}}><div className="stock-bar-fill" style={{width:`${Math.min((ratio/2.5)*100,100)}%`,background:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}/></div><span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}>{Math.round(ratio*100)}%</span></div>):<span style={{color:'#64748b'}}>—</span>}</td>
                         <td style={{textAlign:'right',paddingRight:9,width:155}}>{isOver?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:'#6d28d9'}}>▲ quá max +{fv(curQty-mx)} kg</span>):delta!=null?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(delta))} kg</span>):<span style={{color:'#64748b'}}>—</span>}</td>
-                        <td style={{textAlign:'center'}}><span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:statusColor,padding:'2px 8px',background:isOver?'#f3e8ff':ratio!==null&&ratio<0.8?'#fee2e2':ratio!==null&&ratio<1?'#fef9c3':ratio!==null&&ratio>2?'#e0e7ff':'#dcfce7',borderRadius:4,border:`1px solid ${statusColor}40`}}>{status}</span></td>
+                        <td style={{textAlign:'center',background:hasReq?'#fef3c7':'transparent'}}>{hasReq?<span style={{fontSize:'.82rem',fontWeight:900,color:'#92400e'}}>🛒 {r.buyRequest}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}</td>
+                        <td style={{textAlign:'center',background:hasReq?'#fef3c7':'transparent'}}>{r.buyRequestWeek?<span style={{fontSize:'.78rem',fontWeight:800,color:'#b45309'}}>{r.buyRequestWeek}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}</td>
                         <td><button className="btn-danger" onClick={()=>delMS(r.id)}><Ic.X/></button></td>
                       </tr>
                     );
@@ -4565,7 +4593,7 @@ URL.revokeObjectURL(url);
                           <tbody>
                             {items.map((p,i)=>(
                               <tr key={i} style={p.needBuy>0?{background:'#fff7ed'}:{}}>
-                                <td style={{textAlign:'left'}}><div style={{fontWeight:700}}>{p.alloy} {p.temper} <span style={{fontSize:'.6rem',color:(p.coating==='1E')?'#0f766e':'#a16207',fontWeight:800}}>[{p.coating==='1E'?'PE':'NOPE'}]</span></div><div style={{fontSize:'.6rem',color:'#64748b',fontFamily:'JetBrains Mono'}}>{p.thickness}×{p.width}×{p.length}</div></td>
+                                <td style={{textAlign:'left'}}><SkuLabelCell row={p}/></td>
                                 <td className="mono" style={{textAlign:'right'}}>{fv(p.ordered)}</td>
                                 <td className="mono" style={{textAlign:'right',color:'#15803d'}}>{fv(p.delivered)}</td>
                                 <td className="mono" style={{textAlign:'right',fontWeight:800,color:p.remaining>0?'#b45309':'#64748b'}}>{fv(p.remaining)}</td>
