@@ -4572,7 +4572,7 @@ URL.revokeObjectURL(url);
                       {[
                         {l:'Số PO',v:[...new Set(list.map(p=>p.po))].length,c:'#1d4ed8'},
                         {l:'Dòng SKU',v:list.length,c:'#0369a1'},
-                        {l:'Tổng còn thiếu (kg)',v:fv(sumRemain),c:'#b45309'},
+                        {l:'Tổng chưa giao (kg)',v:fv(sumRemain),c:'#b45309'},
                         {l:'Cần đặt thêm (kg)',v:fv(sumNeed),c:sumNeed>0?'#b91c1c':'#15803d'},
                       ].map((x,i)=><div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'1rem'}}>{x.v}</div></div>)}
                     </div>
