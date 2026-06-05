@@ -2589,6 +2589,8 @@ URL.revokeObjectURL(url);
   }),[sellingPrices,spFilter]);
 
   const filtMsTotalKg=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);const cur=grp?[...grp.inStock,...grp.inTransit].reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0;return s+cur;},0);
+  const filtMsTotalStock=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);return s+(grp?grp.inStock.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0);},0);
+  const filtMsTotalTransit=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);return s+(grp?grp.inTransit.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0);},0);
   const filtMsTotalMin=filteredMs.reduce((s,r)=>s+(parseFloat(r.minStockKg)||0),0);
   const filtMsTotalMax=filteredMs.reduce((s,r)=>s+(r.maxStockKg?parseFloat(r.maxStockKg):0),0);
   const filtMsDelta=filtMsTotalKg-filtMsTotalMin;
@@ -3281,13 +3283,16 @@ URL.revokeObjectURL(url);
               <table className="tbl" style={{background:bg2,borderRadius:8,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
                 <thead>
                   <tr>
-                    <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th>Min Stock kg</th><th>Max Stock kg</th><th>Tồn hiện tại kg</th><th>% đạt min</th><th>Thiếu / Dư kg</th><th style={{background:'#fffbeb',color:'#92400e'}}>🛒 Đề xuất mua</th><th style={{background:'#fffbeb',color:'#92400e'}}>Tuần đề xuất</th><th></th>
+                    <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th>Min Stock kg</th><th>Max Stock kg</th><th>Tồn hiện tại kg<div style={{fontSize:'.52rem',fontWeight:600,opacity:.85}}>🟢 kho · 🟡 đang về</div></th><th>% đạt min</th><th>Thiếu / Dư kg</th><th style={{background:'#fffbeb',color:'#92400e'}}>🛒 Đề xuất mua</th><th style={{background:'#fffbeb',color:'#92400e'}}>Tuần đề xuất</th><th></th>
                   </tr>
                   <tr style={{background:'#e2e8f0'}}>
                     <td colSpan={2} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredMs.length} dòng)</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#7c3aed',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalMin)} kg min</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#6d28d9',fontWeight:800,fontSize:'.8rem'}}>{filtMsTotalMax>0?fv(filtMsTotalMax)+' kg max':'—'}</td>
-                    <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalKg)} kg</td>
+                    <td style={{textAlign:'right',paddingRight:9}}>
+                      <div className="mono" style={{color:'#2563eb',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalKg)} kg</div>
+                      <div style={{fontSize:'.58rem',fontWeight:700}}><span style={{color:'#16a34a'}}>🟢 {fv(filtMsTotalStock)}</span> · <span style={{color:'#d97706'}}>🟡 {fv(filtMsTotalTransit)}</span></div>
+                    </td>
                     <td/>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,fontWeight:900,color:filtMsDelta>=0?'#15803d':'#b91c1c',fontSize:'.8rem'}}>{filtMsDelta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(filtMsDelta))} kg</td>
                     <td colSpan={3}/>
@@ -3296,7 +3301,9 @@ URL.revokeObjectURL(url);
                 <tbody>
                   {filteredMs.map((r,i)=>{
                     const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);
-                    const curQty=grp?[...grp.inStock,...grp.inTransit].reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
+                    const qtyStock=grp?grp.inStock.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
+                    const qtyTransit=grp?grp.inTransit.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
+                    const curQty=qtyStock+qtyTransit;   // Tổng = kho + đang về (dùng so Min/Max)
                     const ratio=r.minStockKg>0?curQty/r.minStockKg:null;const mx=r.maxStockKg;
                     const isOver=mx!==null&&mx>0&&curQty>mx;const delta=r.minStockKg>0?curQty-r.minStockKg:null;
                     const hasReq=String(r.buyRequest||'').trim()!=='';
@@ -3306,7 +3313,13 @@ URL.revokeObjectURL(url);
                         <td style={{paddingLeft:8,minWidth:210}}><SkuLabelCell row={r}/></td>
                         <td style={{width:120}}><input className="inp inp-xs mono" style={{textAlign:'right',color:'#7c3aed',fontWeight:800}} value={fv(r.minStockKg)} onChange={e=>setMS(r.id,{minStockKg:pn(e.target.value)})}/></td>
                         <td style={{width:120}}><input className="inp inp-xs mono" style={{textAlign:'right',color:'#6d28d9',fontWeight:800}} value={r.maxStockKg===null||r.maxStockKg===undefined?'':fv(r.maxStockKg)} onChange={e=>{const v=e.target.value.trim();setMS(r.id,{maxStockKg:v===''?null:pn(v)});}} placeholder="∞ không giới hạn"/></td>
-                        <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#2563eb',fontSize:'.82rem',fontWeight:700}}>{fv(curQty)}</td>
+                        <td style={{textAlign:'right',paddingRight:9}}>
+                          <div className="mono" style={{color:'#2563eb',fontSize:'.82rem',fontWeight:800}}>{fv(curQty)}</div>
+                          <div style={{display:'flex',gap:6,justifyContent:'flex-end',marginTop:1,fontSize:'.6rem',fontWeight:700}}>
+                            <span style={{color:'#16a34a'}} title="Hàng thật trong kho (bán được ngay)">🟢 {fv(qtyStock)}</span>
+                            <span style={{color:'#d97706'}} title="Hàng đã mua đang trên đường về">🟡 {fv(qtyTransit)}</span>
+                          </div>
+                        </td>
                         <td style={{textAlign:'center',width:90}}>{ratio!==null?(<div><div className="stock-bar" style={{height:5,margin:'0 8px 2px'}}><div className="stock-bar-fill" style={{width:`${Math.min((ratio/2.5)*100,100)}%`,background:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}/></div><span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}>{Math.round(ratio*100)}%</span></div>):<span style={{color:'#64748b'}}>—</span>}</td>
                         <td style={{textAlign:'right',paddingRight:9,width:155}}>{isOver?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:'#6d28d9'}}>▲ quá max +{fv(curQty-mx)} kg</span>):delta!=null?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(delta))} kg</span>):<span style={{color:'#64748b'}}>—</span>}</td>
                         <td style={{textAlign:'center',background:hasReq?'#fef3c7':'transparent'}}>{hasReq?<span style={{fontSize:'.82rem',fontWeight:900,color:'#92400e'}}>🛒 {r.buyRequest}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}</td>
@@ -4572,7 +4585,7 @@ URL.revokeObjectURL(url);
                       {[
                         {l:'Số PO',v:[...new Set(list.map(p=>p.po))].length,c:'#1d4ed8'},
                         {l:'Dòng SKU',v:list.length,c:'#0369a1'},
-                        {l:'Tổng chưa giao (kg)',v:fv(sumRemain),c:'#b45309'},
+                        {l:'Tổng còn thiếu (kg)',v:fv(sumRemain),c:'#b45309'},
                         {l:'Cần đặt thêm (kg)',v:fv(sumNeed),c:sumNeed>0?'#b91c1c':'#15803d'},
                       ].map((x,i)=><div key={i} className="kpi" style={{borderColor:x.c,borderLeftWidth:4}}><div className="kpi-l">{x.l}</div><div className="kpi-v" style={{color:x.c,fontSize:'1rem'}}>{x.v}</div></div>)}
                     </div>
@@ -4597,7 +4610,7 @@ URL.revokeObjectURL(url);
                         </div>
                         <table className="tbl" style={{fontSize:'.72rem'}}>
                           <thead><tr>
-                            <th style={{textAlign:'left'}}>SKU</th><th>TL đặt</th><th>Đã giao</th><th>Chưa giao</th><th>Kho đáp ứng</th><th>Đang về</th><th>Cần đặt thêm</th>
+                            <th style={{textAlign:'left'}}>SKU</th><th>TL đặt</th><th>Đã giao</th><th>Còn thiếu</th><th>Kho đáp ứng</th><th>Đang về</th><th>Cần đặt thêm</th>
                           </tr></thead>
                           <tbody>
                             {items.map((p,i)=>(
