@@ -1498,17 +1498,25 @@ const App=()=>{
   },[ghConfig]);
   // Ref để truy cập `result` (vốn được khai báo sau) mà không vi phạm TDZ
   const resultRef=useRef(null);
-  // Lưu PA mua hiện tại lên GitHub
+  // Lưu PA mua lên GitHub — 2 chế độ: NHÁP (chỉ lưu) hoặc TRÌNH DUYỆT (vào luồng duyệt).
   const savePAToGithub=useCallback(async()=>{
-    // Hỏi tên người gửi (bắt buộc)
-    const lastName=localStorage.getItem('pakd_last_sender')||inputs.creator||'';
-    const senderName=prompt(`👤 Bạn là ai? (Tên người gửi PA)\n\nVí dụ: "Hương - Trưởng phòng KD" hoặc "Anh A - NV mua hàng"`,lastName);
-    if(senderName===null) return; // user nhấn Cancel
-    if(!senderName||!senderName.trim()){alert('⚠ Vui lòng nhập tên người gửi');return;}
-    try{localStorage.setItem('pakd_last_sender',senderName.trim());}catch(e){}
-    // Hỏi ghi chú yêu cầu
-    const requestNote=prompt('📝 Ghi chú yêu cầu duyệt (gửi đến Giám đốc):\n\nVí dụ: "Cần duyệt gấp, NCC chốt 17h hôm nay" hoặc để trống nếu không có');
-    if(requestNote===null) return; // user nhấn Cancel
+    // B1: hỏi muốn trình duyệt luôn không?
+    const choice=window.confirm('Bạn có muốn TRÌNH DUYỆT phương án này luôn không?\n\n• OK = Trình duyệt (gửi vào luồng duyệt, cần ký bước đầu)\n• Cancel = Chỉ lưu nháp (lưu lên cloud, chưa trình ai)');
+    let submitMode=choice; // true=trình duyệt, false=lưu nháp
+    let sender=null, opinion='', firstApprovalPin='';
+    if(submitMode){
+      const apList=approvers.length?approvers:await loadApprovers();
+      if(apList.length===0){alert('⚠ Chưa thiết lập người duyệt. Vào ⚙️ GitHub → "Quản lý người duyệt" trước, hoặc Cancel để lưu nháp.');return;}
+      const first=apList.slice().sort((a,b)=>(a.order||0)-(b.order||0))[0]; // bước 1 = người order nhỏ nhất (Mua hàng)
+      if(!window.confirm(`Bạn trình duyệt với tư cách BƯỚC 1:\n\n${first.name} — ${first.role}\n\nOK để tiếp tục, Cancel để hủy.`)) return;
+      sender=first;
+      opinion=window.prompt(`📝 Ý kiến đề xuất của ${first.name} (${first.role}):\n\nVí dụ: "Đề xuất mua, giá CIF tốt, cần hàng gấp."`)||'';
+      if(opinion===null) return;
+      firstApprovalPin=window.prompt(`🔐 Nhập PIN riêng của ${first.name} để ký bước 1:`);
+      if(firstApprovalPin===null) return;
+      const ok=await verifyApproverPin(first.id,firstApprovalPin);
+      if(!ok){alert('❌ PIN SAI — không ký được bước 1.');return;}
+    }
     setGhStatus(p=>({...p,loading:true,error:null}));
     try{
       const now=new Date();
@@ -1516,38 +1524,28 @@ const App=()=>{
       const fname=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}h${pad(now.getMinutes())}.json`;
       const path=`contents/plans/${fname}`;
       const r=resultRef.current;
+      const approvals=submitMode?[{order:sender.order,id:sender.id,name:sender.name,role:sender.role,decision:'approved',opinion:(opinion||'').trim(),at:now.toISOString()}]:[];
       const payload={
         savedAt:now.toISOString(),
-        savedBy:senderName.trim(),
-        requestedBy:senderName.trim(),
-        requestNote:requestNote.trim()||null,
-        version:'PAKD 7.0',
-        status:'pending',          // Phê duyệt: pending/approved/rejected
-        approvedBy:null,
-        approvedAt:null,
-        approveNote:null,
-        inputs,
-        products,
-        snapshot:{
-          inventoryCount:inventory.length,
-          totalKg:r?r.totalKg:0,
-          totalVND:r?r.invoiceVND:0,
-          totalGrossProfit:r?r.totalGrossProfit:0,
-        }
+        savedBy:submitMode?sender.name:(inputs.creator||'?'),
+        requestedBy:submitMode?sender.name:(inputs.creator||'?'),
+        requestNote:submitMode?(opinion||'').trim()||null:null,
+        version:'PAKD 7.6',
+        status:submitMode?'pending':'draft',   // draft = nháp; pending = đang trình duyệt
+        approvals,
+        approvedBy:null,approvedAt:null,approveNote:null,
+        inputs,products,
+        snapshot:{inventoryCount:inventory.length,totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0}
       };
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-      await ghAPI('PUT',path,{
-        message:`Lưu PA mua ${fname} bởi ${inputs.creator||'?'}`,
-        content:contentB64,
-        branch:ghConfig.branch||'main',
-      });
-      setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã lưu ${fname}`}));
-      alert(`✓ Lưu PA thành công lên GitHub!\nFile: ${fname}`);
+      await ghAPI('PUT',path,{message:`${submitMode?'Trình duyệt':'Lưu nháp'} PA ${fname}`,content:contentB64,branch:ghConfig.branch||'main'});
+      setGhStatus(p=>({...p,loading:false,lastAction:`✓ ${submitMode?'Đã trình duyệt':'Đã lưu nháp'} ${fname}`}));
+      alert(`✓ ${submitMode?'ĐÃ TRÌNH DUYỆT':'ĐÃ LƯU NHÁP'} thành công!\nFile: ${fname}${submitMode?`\n\nĐã ký bước 1: ${sender.name}. Chuyển đến bước kế tiếp.`:'\n\n(Bản nháp — chưa trình ai. Mở "Tải PA cloud" để trình duyệt sau.)'}`);
     }catch(e){
       setGhStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi lưu PA:\n${e.message}`);
     }
-  },[ghAPI,inputs,products,inventory,ghConfig.branch]);
+  },[ghAPI,inputs,products,inventory,ghConfig.branch,approvers,loadApprovers,verifyApproverPin]);
   // List các PA đã lưu (kèm fetch metadata: status, requestedBy, requestNote)
   const listPAsFromGithub=useCallback(async()=>{
     setGhStatus(p=>({...p,loading:true,error:null}));
@@ -1805,14 +1803,43 @@ const App=()=>{
     const res=await ghAPI('PUT','contents/config/approvers.json',body);
     setApvSha(res.content?.sha||null);
   },[ghAPI,ghConfig.branch,apvSha]);
-  // Thêm 1 người duyệt mới (tên, vai trò, PIN). order tự tăng.
+  // Vai trò có quyền quản trị (thêm/xóa người duyệt): chứa "giám đốc" hoặc "quản trị"
+  const isAdminRole=useCallback((role)=>{
+    const r=stripVN(role||'');
+    return r.includes('giamdoc')||r.includes('quantri')||r.includes('admin');
+  },[]);
+  // Xác thực PIN quản trị: khớp PIN của BẤT KỲ người nào có vai trò quản trị.
+  // Trả {ok, by}. Nếu danh sách trống → ok=true (khởi tạo người đầu tiên).
+  const verifyAdminPin=useCallback(async(pin)=>{
+    const list=approvers.length?approvers:await loadApprovers();
+    if(list.length===0) return {ok:true,by:'(khởi tạo)'};
+    const admins=list.filter(a=>isAdminRole(a.role));
+    if(admins.length===0){
+      // Chưa có ai là quản trị/GĐ → tạm cho người order cao nhất làm admin
+      const top=list.slice().sort((a,b)=>(b.order||0)-(a.order||0))[0];
+      if(top){const h=await sha256(pin);return {ok:h===top.pinHash,by:top.name};}
+      return {ok:false,by:null};
+    }
+    const h=await sha256(pin);
+    const matched=admins.find(a=>a.pinHash===h);
+    return {ok:!!matched,by:matched?matched.name:null};
+  },[approvers,loadApprovers,isAdminRole,sha256]);
+
+  // Thêm 1 người duyệt mới (tên, vai trò, PIN). Cần PIN quản trị (trừ người đầu tiên).
   const addApprover=useCallback(async(name,role,pin)=>{
     if(!name.trim()||!role.trim()){alert('❌ Nhập đủ Tên và Vai trò');return false;}
     if(!/^\d{4,8}$/.test(pin)){alert('❌ PIN phải là 4–8 chữ số');return false;}
+    const cur=approvers.length?approvers:await loadApprovers();
+    // Khóa quản trị: nếu đã có người trong danh sách → cần PIN của Giám đốc/Quản trị
+    if(cur.length>0){
+      const adminPin=window.prompt('🔐 Thao tác này cần quyền QUẢN TRỊ.\nNhập PIN của Giám đốc / Quản trị để xác nhận THÊM người duyệt:');
+      if(adminPin===null) return false;
+      const chk=await verifyAdminPin(adminPin);
+      if(!chk.ok){alert('❌ PIN quản trị SAI. Không có quyền thêm người duyệt.');return false;}
+    }
     const id=name.trim().toLowerCase().normalize('NFD').replace(COMBINING,'').replace(/[^a-z0-9]/g,'')+'_'+Date.now().toString(36).slice(-4);
     setApvStatus(p=>({...p,loading:true,error:null}));
     try{
-      const cur=approvers.length?approvers:await loadApprovers();
       const pinHash=await sha256(pin);
       const maxOrder=cur.reduce((m,a)=>Math.max(m,a.order||0),0);
       const next=[...cur,{id,name:name.trim(),role:role.trim(),order:maxOrder+1,pinHash}];
@@ -1822,18 +1849,23 @@ const App=()=>{
       alert(`✓ Đã thêm người duyệt: ${name.trim()} (${role.trim()})`);
       return true;
     }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); return false; }
-  },[approvers,loadApprovers,saveApprovers,sha256]);
-  // Xóa 1 người duyệt
+  },[approvers,loadApprovers,saveApprovers,sha256,verifyAdminPin]);
+  // Xóa 1 người duyệt — cần PIN quản trị
   const removeApprover=useCallback(async(id)=>{
-    if(!window.confirm('Xóa người duyệt này khỏi danh sách?')) return;
+    const cur=approvers.length?approvers:await loadApprovers();
+    const target=cur.find(a=>a.id===id);
+    const adminPin=window.prompt(`🔐 Thao tác này cần quyền QUẢN TRỊ.\nNhập PIN của Giám đốc / Quản trị để xác nhận XÓA: ${target?target.name+' ('+target.role+')':''}`);
+    if(adminPin===null) return;
+    const chk=await verifyAdminPin(adminPin);
+    if(!chk.ok){alert('❌ PIN quản trị SAI. Không có quyền xóa người duyệt.');return;}
     setApvStatus(p=>({...p,loading:true,error:null}));
     try{
-      const cur=approvers.length?approvers:await loadApprovers();
       const next=cur.filter(a=>a.id!==id).sort((a,b)=>(a.order||0)-(b.order||0)).map((a,i)=>({...a,order:i+1}));
       await saveApprovers(next); setApprovers(next);
       setApvStatus(p=>({...p,loading:false}));
+      alert(`✓ Đã xóa (xác nhận bởi ${chk.by}).`);
     }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); }
-  },[approvers,loadApprovers,saveApprovers]);
+  },[approvers,loadApprovers,saveApprovers,verifyAdminPin]);
   // Xác thực PIN của 1 người duyệt cụ thể (theo id)
   const verifyApproverPin=useCallback(async(id,pin)=>{
     const list=approvers.length?approvers:await loadApprovers();
@@ -3011,13 +3043,14 @@ URL.revokeObjectURL(url);
                   <button className="btn btn-ghost btn-sm" onClick={addProduct}><Ic.Plus/> Thêm SKU</button>
                   {/* ─── Cloud PA ─── (chỉ thuộc tab PAKD Mua) */}
                   <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
-                  <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu PA mua hiện tại lên GitHub':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
-                    {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu PA cloud
+                  <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu nháp hoặc trình duyệt PA mua hiện tại':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                    {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu &amp; Trình duyệt
                   </button>
-                  <button className="btn btn-solid btn-sm" onClick={()=>window.print()} title="In Phương án mua hàng ra giấy A4" style={{padding:'4px 9px',fontSize:'.72rem'}}><Ic.Print/> In A4</button>
-                  <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải danh sách PA đã lưu trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                  <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải / duyệt danh sách PA trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
                     📂 Tải PA cloud
                   </button>
+                  <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
+                  <button className="btn btn-solid btn-sm" onClick={()=>window.print()} title="In Phương án mua hàng ra giấy A4" style={{padding:'4px 9px',fontSize:'.72rem'}}><Ic.Print/> In A4</button>
                 </div>
               </div>
 
@@ -5095,7 +5128,8 @@ URL.revokeObjectURL(url);
               <button onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
             <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'9px 12px',marginBottom:14,fontSize:'.72rem',color:'#1e40af',lineHeight:1.6,fontWeight:600}}>
-              Quy trình duyệt PAKD Mua &amp; Giá sàn diễn ra <strong>tuần tự theo thứ tự dưới đây</strong>. Mỗi người dùng PIN riêng để ký ý kiến. Thêm/bớt người không cần sửa code.
+              Quy trình duyệt PAKD Mua &amp; Giá sàn diễn ra <strong>tuần tự theo thứ tự dưới đây</strong>. Mỗi người dùng PIN riêng để ký ý kiến.<br/>
+              🔐 <strong>Thêm/Xóa người duyệt cần PIN của Giám đốc hoặc Quản trị.</strong> Người đầu tiên nên là <em>Quản trị</em> (sẽ giữ quyền quản lý danh sách). Người đầu tiên thêm không cần PIN.
             </div>
             {/* Danh sách hiện có */}
             <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a',marginBottom:8}}>Danh sách hiện tại ({approvers.length})</div>
@@ -5160,21 +5194,23 @@ URL.revokeObjectURL(url);
                     const cur=ghStatus.filterStatus||'all';
                     const counts={
                       all:ghStatus.plansList.length,
+                      draft:ghStatus.plansList.filter(f=>f._status==='draft').length,
                       pending:ghStatus.plansList.filter(f=>f._status==='pending').length,
                       approved:ghStatus.plansList.filter(f=>f._status==='approved').length,
                       rejected:ghStatus.plansList.filter(f=>f._status==='rejected').length,
                     };
                     return[
                       {k:'all',l:`Tất cả (${counts.all})`,c:'#475569'},
+                      {k:'draft',l:`📝 Nháp (${counts.draft})`,c:'#475569'},
                       {k:'pending',l:`⏳ Chờ (${counts.pending})`,c:'#854d0e'},
                       {k:'approved',l:`✓ Duyệt (${counts.approved})`,c:'#14532d'},
                       {k:'rejected',l:`✗ Từ chối (${counts.rejected})`,c:'#991b1b'},
-                    ].map(t=>(<button key={t.k} onClick={()=>setGhStatus(p=>({...p,filterStatus:t.k}))} style={{flex:1,padding:'5px 8px',fontSize:'.7rem',fontWeight:800,border:'none',borderRadius:4,cursor:'pointer',background:cur===t.k?'#2563eb':'transparent',color:cur===t.k?'#fff':t.c}}>{t.l}</button>));
+                    ].map(t=>(<button key={t.k} onClick={()=>setGhStatus(p=>({...p,filterStatus:t.k}))} style={{flex:1,padding:'5px 6px',fontSize:'.66rem',fontWeight:800,border:'none',borderRadius:4,cursor:'pointer',background:cur===t.k?'#2563eb':'transparent',color:cur===t.k?'#fff':t.c}}>{t.l}</button>));
                   })()}
                 </div>
                 {ghStatus.plansList.filter(f=>{const fs=ghStatus.filterStatus||'all';return fs==='all'||f._status===fs;}).map((f,i)=>{
                   const st=f._status||'pending';
-                  const badge=st==='approved'?{bg:'#dcfce7',br:'#86efac',c:'#14532d',t:'✓ ĐÃ DUYỆT'}:st==='rejected'?{bg:'#fee2e2',br:'#fca5a5',c:'#991b1b',t:'✗ TỪ CHỐI'}:st==='error'?{bg:'#f1f5f9',br:'#cbd5e1',c:'#475569',t:'⚠ Lỗi'}:{bg:'#fef3c7',br:'#fcd34d',c:'#854d0e',t:'⏳ CHỜ DUYỆT'};
+                  const badge=st==='approved'?{bg:'#dcfce7',br:'#86efac',c:'#14532d',t:'✓ ĐÃ DUYỆT'}:st==='rejected'?{bg:'#fee2e2',br:'#fca5a5',c:'#991b1b',t:'✗ TỪ CHỐI'}:st==='draft'?{bg:'#f1f5f9',br:'#cbd5e1',c:'#475569',t:'📝 NHÁP (chưa trình)'}:st==='error'?{bg:'#f1f5f9',br:'#cbd5e1',c:'#475569',t:'⚠ Lỗi'}:{bg:'#fef3c7',br:'#fcd34d',c:'#854d0e',t:'⏳ CHỜ DUYỆT'};
                   return(
                     <div key={i} style={{background:'#fff',border:`2px solid ${badge.br}`,borderRadius:7,padding:'10px 13px'}}>
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
