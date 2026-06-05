@@ -171,6 +171,34 @@ function PinSetupForm({onSubmit,loading}){
   );
 }
 
+// Form thêm 1 người duyệt (Việc 1)
+function ApproverAddForm({onAdd,loading}){
+  const [name,setName]=useState('');
+  const [role,setRole]=useState('');
+  const [pin,setPin]=useState('');
+  const ROLES=['Mua hàng','TP Kinh doanh','Giám đốc','Kế toán','Khác'];
+  const ok=name.trim()&&role.trim()&&/^\d{4,8}$/.test(pin);
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:9}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+        <div><label className="lbl">Tên người duyệt</label><input type="text" className="inp" placeholder="Ví dụ: Ms Hương" value={name} onChange={e=>setName(e.target.value)}/></div>
+        <div><label className="lbl">Vai trò</label>
+          <input list="role-list" className="inp" placeholder="Chọn / gõ vai trò" value={role} onChange={e=>setRole(e.target.value)}/>
+          <datalist id="role-list">{ROLES.map(r=><option key={r} value={r}/>)}</datalist>
+        </div>
+      </div>
+      <div>
+        <label className="lbl">PIN riêng của người này (4–8 chữ số)</label>
+        <input type="password" className="inp" placeholder="Ví dụ: 1234" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').substring(0,8))} style={{fontFamily:'JetBrains Mono',fontSize:'.95rem',letterSpacing:'.2em',textAlign:'center'}}/>
+        {pin&&!/^\d{4,8}$/.test(pin)&&<div style={{fontSize:'.65rem',color:'#dc2626',marginTop:3,fontWeight:700}}>PIN phải 4–8 chữ số</div>}
+      </div>
+      <div style={{display:'flex',justifyContent:'flex-end'}}>
+        <button className="btn btn-success btn-sm" disabled={loading||!ok} onClick={async()=>{const done=await onAdd(name.trim(),role.trim(),pin);if(done){setName('');setRole('');setPin('');}}}>{loading?'⏳ Đang lưu...':'➕ Thêm vào quy trình duyệt'}</button>
+      </div>
+    </div>
+  );
+}
+
 const ALLOYS=["A1050","A1052","A1060","A3003","A3003 CT","A3105","A5052","A5083","A6061","A6063"];
 const TEMPERS=["H14","H16","H18","H24","H32","H34","H111","O","T5","T6"];
 const THICKS=["0.4","0.5","0.6","0.7","0.8","0.9","1.0","1.2","1.5","2.0","2.5","3.0","4.0","5.0","6.0"];
@@ -1598,6 +1626,11 @@ const App=()=>{
     verifyOpen:false,         // mở modal nhập PIN khi duyệt
     pendingAction:null,       // {type:'PA'|'FLOOR', file, newStatus}
   });
+  // ── Việc 1: Danh sách người duyệt (lưu /config/approvers.json) ──
+  // Mỗi người: {id, name, role, order, pinHash}. Quy trình tuần tự theo `order`.
+  const [approvers,setApprovers]=useState([]);     // mảng người duyệt
+  const [apvSha,setApvSha]=useState(null);          // sha file để cập nhật
+  const [apvStatus,setApvStatus]=useState({loading:false,error:null,manageOpen:false});
   // Helper: hash chuỗi bằng SHA-256 (browser native)
   const sha256=async(text)=>{
     const enc=new TextEncoder().encode(text);
@@ -1655,6 +1688,68 @@ const App=()=>{
     if(!serverHash){alert('⚠ Chưa thiết lập PIN duyệt. Vui lòng vào ⚙️ → "Thiết lập PIN" trước.');return false;}
     return hash===serverHash;
   },[pinStatus.hashOnServer,loadPinHash]);
+
+  // ════ VIỆC 1: QUẢN LÝ NGƯỜI DUYỆT (/config/approvers.json) ════
+  // Tải danh sách người duyệt từ GitHub
+  const loadApprovers=useCallback(async()=>{
+    if(!ghConfig.owner||!ghConfig.token) return [];
+    try{
+      const data=await ghAPI('GET','contents/config/approvers.json');
+      const content=decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
+      const obj=JSON.parse(content);
+      const list=(obj.approvers||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+      setApprovers(list); setApvSha(data.sha||null);
+      return list;
+    }catch(e){ setApprovers([]); setApvSha(null); return []; }
+  },[ghAPI,ghConfig.owner,ghConfig.token]);
+  // Ghi danh sách người duyệt lên GitHub
+  const saveApprovers=useCallback(async(list)=>{
+    const payload={version:1,updatedAt:new Date().toISOString(),approvers:list};
+    const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
+    const body={message:`Cập nhật danh sách người duyệt (${list.length} người)`,content:contentB64,branch:ghConfig.branch||'main'};
+    if(apvSha) body.sha=apvSha;
+    const res=await ghAPI('PUT','contents/config/approvers.json',body);
+    setApvSha(res.content?.sha||null);
+  },[ghAPI,ghConfig.branch,apvSha]);
+  // Thêm 1 người duyệt mới (tên, vai trò, PIN). order tự tăng.
+  const addApprover=useCallback(async(name,role,pin)=>{
+    if(!name.trim()||!role.trim()){alert('❌ Nhập đủ Tên và Vai trò');return false;}
+    if(!/^\d{4,8}$/.test(pin)){alert('❌ PIN phải là 4–8 chữ số');return false;}
+    const id=name.trim().toLowerCase().normalize('NFD').replace(COMBINING,'').replace(/[^a-z0-9]/g,'')+'_'+Date.now().toString(36).slice(-4);
+    setApvStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const cur=approvers.length?approvers:await loadApprovers();
+      const pinHash=await sha256(pin);
+      const maxOrder=cur.reduce((m,a)=>Math.max(m,a.order||0),0);
+      const next=[...cur,{id,name:name.trim(),role:role.trim(),order:maxOrder+1,pinHash}];
+      await saveApprovers(next);
+      setApprovers(next);
+      setApvStatus(p=>({...p,loading:false}));
+      alert(`✓ Đã thêm người duyệt: ${name.trim()} (${role.trim()})`);
+      return true;
+    }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); return false; }
+  },[approvers,loadApprovers,saveApprovers,sha256]);
+  // Xóa 1 người duyệt
+  const removeApprover=useCallback(async(id)=>{
+    if(!window.confirm('Xóa người duyệt này khỏi danh sách?')) return;
+    setApvStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const cur=approvers.length?approvers:await loadApprovers();
+      const next=cur.filter(a=>a.id!==id).sort((a,b)=>(a.order||0)-(b.order||0)).map((a,i)=>({...a,order:i+1}));
+      await saveApprovers(next); setApprovers(next);
+      setApvStatus(p=>({...p,loading:false}));
+    }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); }
+  },[approvers,loadApprovers,saveApprovers]);
+  // Xác thực PIN của 1 người duyệt cụ thể (theo id)
+  const verifyApproverPin=useCallback(async(id,pin)=>{
+    const list=approvers.length?approvers:await loadApprovers();
+    const ap=list.find(a=>a.id===id);
+    if(!ap){alert('⚠ Không tìm thấy người duyệt');return false;}
+    const hash=await sha256(pin);
+    return hash===ap.pinHash;
+  },[approvers,loadApprovers,sha256]);
+  // Tự tải danh sách người duyệt khi đã xác thực GitHub
+  useEffect(()=>{ if(ghVerified) loadApprovers(); },[ghVerified,loadApprovers]);
   // Helper: lấy tuần ISO label "2026-W21" từ Date
   const getWeekLabel=(d)=>{
     const dt=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
@@ -4855,21 +4950,57 @@ URL.revokeObjectURL(url);
                   if(ok){setGhStatus(p=>({...p,configOpen:false}));}
                 }}>{ghVerifying?'⏳ Đang xác thực...':'💾 Lưu & Xác thực'}</button>
               </div>
-              {/* PIN setup section */}
+              {/* Quản lý người duyệt (Việc 1) */}
               <div style={{marginTop:14,paddingTop:14,borderTop:'2px dashed #cbd5e1'}}>
-                <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a',marginBottom:8}}>🔐 PIN duyệt của Giám đốc</div>
+                <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a',marginBottom:8}}>🔐 Người duyệt (quy trình tuần tự)</div>
                 <div style={{fontSize:'.7rem',color:'#475569',marginBottom:8,lineHeight:1.5}}>
-                  PIN dùng để xác thực khi Giám đốc duyệt/từ chối PA mua hoặc Lịch sử Sàn.<br/>
-                  ⚠️ Chỉ thiết lập 1 lần. Muốn đặt lại: vào GitHub xóa file <code style={{background:'#f1f5f9',padding:'1px 4px',borderRadius:3}}>/config/approver.json</code> rồi mở app lại.
+                  Mỗi người duyệt có 1 PIN riêng (Mua hàng → TP Kinh doanh → Giám đốc). Lưu tại <code style={{background:'#f1f5f9',padding:'1px 4px',borderRadius:3}}>/config/approvers.json</code>. Thêm người sau này chỉ cần mở bảng dưới đây — không sửa code.
                 </div>
-                <button className="btn btn-purple btn-sm" onClick={async()=>{
-                  const h=await loadPinHash();
-                  if(h){alert('✓ PIN duyệt ĐÃ được thiết lập.\nHash: '+h.substring(0,12)+'...\n\nMuốn đổi PIN: vào GitHub xóa file /config/approver.json');return;}
-                  setPinStatus(p=>({...p,setupOpen:true}));
-                  setGhStatus(p=>({...p,configOpen:false}));
-                }} disabled={pinStatus.loading||!ghConfig.token}>🔐 Kiểm tra / Thiết lập PIN</button>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <button className="btn btn-purple btn-sm" onClick={async()=>{await loadApprovers();setApvStatus(p=>({...p,manageOpen:true}));setGhStatus(p=>({...p,configOpen:false}));}} disabled={!ghConfig.token}>👥 Quản lý người duyệt</button>
+                  <span style={{fontSize:'.7rem',color:'#475569',fontWeight:700}}>{approvers.length>0?`✓ ${approvers.length} người`:'Chưa thiết lập'}</span>
+                </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: QUẢN LÝ NGƯỜI DUYỆT (Việc 1) */}
+      {apvStatus.manageOpen&&(
+        <div onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>👥 Quản lý người duyệt</h3>
+              <button onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+            </div>
+            <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'9px 12px',marginBottom:14,fontSize:'.72rem',color:'#1e40af',lineHeight:1.6,fontWeight:600}}>
+              Quy trình duyệt PAKD Mua &amp; Giá sàn diễn ra <strong>tuần tự theo thứ tự dưới đây</strong>. Mỗi người dùng PIN riêng để ký ý kiến. Thêm/bớt người không cần sửa code.
+            </div>
+            {/* Danh sách hiện có */}
+            <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a',marginBottom:8}}>Danh sách hiện tại ({approvers.length})</div>
+            {approvers.length===0?(
+              <div style={{textAlign:'center',padding:'18px',color:'#94a3b8',fontWeight:600,fontSize:'.78rem',background:'#f8fafc',borderRadius:6,marginBottom:14}}>Chưa có người duyệt nào. Thêm bên dưới (theo thứ tự: Mua hàng → TP Kinh doanh → Giám đốc).</div>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:14}}>
+                {approvers.map((a,i)=>(
+                  <div key={a.id} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:7,padding:'8px 12px'}}>
+                    <span style={{width:24,height:24,borderRadius:'50%',background:'#1d4ed8',color:'#fff',fontWeight:900,fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{a.order||i+1}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,fontSize:'.84rem',color:'#0f172a'}}>{a.name}</div>
+                      <div style={{fontSize:'.68rem',color:'#475569',fontWeight:600}}>{a.role} · 🔒 PIN đã đặt</div>
+                    </div>
+                    <button className="btn-danger" onClick={()=>removeApprover(a.id)} disabled={apvStatus.loading} title="Xóa người này"><Ic.X/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* Form thêm người */}
+            <div style={{borderTop:'2px dashed #cbd5e1',paddingTop:12}}>
+              <div style={{fontSize:'.78rem',fontWeight:900,color:'#0f172a',marginBottom:8}}>➕ Thêm người duyệt</div>
+              <ApproverAddForm loading={apvStatus.loading} onAdd={addApprover}/>
+            </div>
+            {apvStatus.error&&<div style={{background:'#fee2e2',border:'1px solid #fca5a5',borderRadius:5,padding:'7px 10px',fontSize:'.72rem',color:'#991b1b',fontWeight:600,marginTop:10}}>❌ {apvStatus.error}</div>}
           </div>
         </div>
       )}
