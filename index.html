@@ -176,7 +176,11 @@ function ApproverAddForm({onAdd,loading}){
   const [name,setName]=useState('');
   const [role,setRole]=useState('');
   const [pin,setPin]=useState('');
-  const ROLES=['Mua hàng','TP Kinh doanh','Giám đốc','Kế toán','Khác'];
+  const [isAdmin,setIsAdmin]=useState(false);
+  const [stepBuy,setStepBuy]=useState('0');
+  const [stepFloor,setStepFloor]=useState('0');
+  const ROLES=['Quản trị viên','Mua hàng','TP Kinh doanh','Giám đốc','Kế toán','Khác'];
+  const STEPS=['0','1','2','3','4','5'];
   const ok=name.trim()&&role.trim()&&/^\d{4,8}$/.test(pin);
   return(
     <div style={{display:'flex',flexDirection:'column',gap:9}}>
@@ -187,13 +191,46 @@ function ApproverAddForm({onAdd,loading}){
           <datalist id="role-list">{ROLES.map(r=><option key={r} value={r}/>)}</datalist>
         </div>
       </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+        <div><label className="lbl">Bước duyệt — luồng MUA (0 = không tham gia)</label>
+          <select className="inp" value={stepBuy} onChange={e=>setStepBuy(e.target.value)}>{STEPS.map(s=><option key={s} value={s}>{s==='0'?'0 — không tham gia':'Bước '+s}</option>)}</select>
+        </div>
+        <div><label className="lbl">Bước duyệt — luồng GIÁ SÀN (0 = không)</label>
+          <select className="inp" value={stepFloor} onChange={e=>setStepFloor(e.target.value)}>{STEPS.map(s=><option key={s} value={s}>{s==='0'?'0 — không tham gia':'Bước '+s}</option>)}</select>
+        </div>
+      </div>
+      <label style={{display:'flex',alignItems:'center',gap:6,fontSize:'.75rem',fontWeight:700,color:'#6d28d9',cursor:'pointer'}}>
+        <input type="checkbox" checked={isAdmin} onChange={e=>setIsAdmin(e.target.checked)}/> Là Quản trị (được quyền thêm/xóa/đổi bước người duyệt)
+      </label>
       <div>
         <label className="lbl">PIN riêng của người này (4–8 chữ số)</label>
         <input type="password" className="inp" placeholder="Ví dụ: 1234" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').substring(0,8))} style={{fontFamily:'JetBrains Mono',fontSize:'.95rem',letterSpacing:'.2em',textAlign:'center'}}/>
         {pin&&!/^\d{4,8}$/.test(pin)&&<div style={{fontSize:'.65rem',color:'#dc2626',marginTop:3,fontWeight:700}}>PIN phải 4–8 chữ số</div>}
       </div>
+      <div style={{fontSize:'.66rem',color:'#64748b',lineHeight:1.4}}>💡 Quản trị viên thường để cả 2 bước = 0 (chỉ quản lý, không phải ký). Nếu kiêm duyệt thì đặt bước cho luồng tương ứng.</div>
       <div style={{display:'flex',justifyContent:'flex-end'}}>
-        <button className="btn btn-success btn-sm" disabled={loading||!ok} onClick={async()=>{const done=await onAdd(name.trim(),role.trim(),pin);if(done){setName('');setRole('');setPin('');}}}>{loading?'⏳ Đang lưu...':'➕ Thêm vào quy trình duyệt'}</button>
+        <button className="btn btn-success btn-sm" disabled={loading||!ok} onClick={async()=>{const done=await onAdd({name:name.trim(),role:role.trim(),pin,isAdmin,stepBuy,stepFloor});if(done){setName('');setRole('');setPin('');setIsAdmin(false);setStepBuy('0');setStepFloor('0');}}}>{loading?'⏳ Đang lưu...':'➕ Thêm người duyệt'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Modal nhập PIN ẩn chữ (thay window.prompt) — trả PIN qua onSubmit / null qua onCancel
+function PinPromptModal({message,onSubmit,onCancel}){
+  const [pin,setPin]=useState('');
+  const submit=()=>{onSubmit(pin);};
+  return(
+    <div onClick={onCancel} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.72)',zIndex:10001,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:420,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.35)'}}>
+        <div style={{fontSize:'.86rem',fontWeight:800,color:'#0f172a',marginBottom:12,lineHeight:1.5}}>{message}</div>
+        <input autoFocus type="password" inputMode="numeric" className="inp" placeholder="Nhập PIN ●●●●" value={pin}
+          onChange={e=>setPin(e.target.value.replace(/\D/g,'').substring(0,8))}
+          onKeyDown={e=>{if(e.key==='Enter'&&pin)submit();if(e.key==='Escape')onCancel();}}
+          style={{fontFamily:'JetBrains Mono',fontSize:'1.1rem',letterSpacing:'.35em',textAlign:'center'}}/>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:14}}>
+          <button className="btn btn-ghost btn-sm" onClick={onCancel}>Hủy</button>
+          <button className="btn btn-success btn-sm" disabled={!pin} onClick={submit}>Xác nhận</button>
+        </div>
       </div>
     </div>
   );
@@ -399,13 +436,22 @@ const filterPrevWeekUIP=rows=>{
 // Việc 1 đợt 2: tính bước duyệt kế tiếp theo quy trình tuần tự.
 // approvers: danh sách [{id,order,...}] đã sort; approvals: [{id,decision}] đã xử lý.
 // Trả về: {done, rejected, nextApprover} — nextApprover=null nếu đã xong hoặc đã bị từ chối.
-const approvalProgress=(approvers,approvals)=>{
-  const apvs=(approvers||[]).slice().sort((a,b)=>(a.order||0)-(b.order||0));
+// Bước duyệt của 1 người theo luồng: flow='buy'→stepBuy, 'floor'→stepFloor. 0/trống = không tham gia.
+// Tương thích ngược: nếu chưa có stepBuy/stepFloor thì dùng `order` cho luồng 'buy'.
+const stepOf=(ap,flow)=>{
+  if(flow==='floor') return parseInt(ap.stepFloor)||0;
+  const sb=ap.stepBuy;
+  if(sb!==undefined&&sb!==null&&sb!=='') return parseInt(sb)||0;
+  return parseInt(ap.order)||0; // fallback dữ liệu cũ
+};
+// Tiến trình duyệt theo luồng (mặc định 'buy'). Chỉ tính người có step>0.
+const approvalProgress=(approvers,approvals,flow='buy')=>{
+  const apvs=(approvers||[]).filter(a=>stepOf(a,flow)>0).slice().sort((a,b)=>stepOf(a,flow)-stepOf(b,flow));
   const acts=approvals||[];
   const rejected=acts.some(a=>a.decision==='rejected');
-  if(rejected) return {done:false,rejected:true,nextApprover:null};
+  if(rejected) return {done:false,rejected:true,nextApprover:null,chain:apvs};
   const next=apvs.find(ap=>!acts.some(a=>a.id===ap.id&&a.decision==='approved'));
-  return {done:!next,rejected:false,nextApprover:next||null};
+  return {done:apvs.length>0&&!next,rejected:false,nextApprover:next||null,chain:apvs,empty:apvs.length===0};
 };
 
 const weightedAvg=rows=>{
@@ -1498,52 +1544,63 @@ const App=()=>{
   },[ghConfig]);
   // Ref để truy cập `result` (vốn được khai báo sau) mà không vi phạm TDZ
   const resultRef=useRef(null);
-  // Lưu PA mua lên GitHub — 2 chế độ: NHÁP (chỉ lưu) hoặc TRÌNH DUYỆT (vào luồng duyệt).
-  const savePAToGithub=useCallback(async()=>{
-    // B1: hỏi muốn trình duyệt luôn không?
-    const choice=window.confirm('Bạn có muốn TRÌNH DUYỆT phương án này luôn không?\n\n• OK = Trình duyệt (gửi vào luồng duyệt, cần ký bước đầu)\n• Cancel = Chỉ lưu nháp (lưu lên cloud, chưa trình ai)');
-    let submitMode=choice; // true=trình duyệt, false=lưu nháp
-    let sender=null, opinion='', firstApprovalPin='';
-    if(submitMode){
-      const apList=approvers.length?approvers:await loadApprovers();
-      if(apList.length===0){alert('⚠ Chưa thiết lập người duyệt. Vào ⚙️ GitHub → "Quản lý người duyệt" trước, hoặc Cancel để lưu nháp.');return;}
-      const first=apList.slice().sort((a,b)=>(a.order||0)-(b.order||0))[0]; // bước 1 = người order nhỏ nhất (Mua hàng)
-      if(!window.confirm(`Bạn trình duyệt với tư cách BƯỚC 1:\n\n${first.name} — ${first.role}\n\nOK để tiếp tục, Cancel để hủy.`)) return;
-      sender=first;
-      opinion=window.prompt(`📝 Ý kiến đề xuất của ${first.name} (${first.role}):\n\nVí dụ: "Đề xuất mua, giá CIF tốt, cần hàng gấp."`)||'';
-      if(opinion===null) return;
-      firstApprovalPin=window.prompt(`🔐 Nhập PIN riêng của ${first.name} để ký bước 1:`);
-      if(firstApprovalPin===null) return;
-      const ok=await verifyApproverPin(first.id,firstApprovalPin);
-      if(!ok){alert('❌ PIN SAI — không ký được bước 1.');return;}
-    }
+  // LƯU LOCAL: lưu PA nháp vào localStorage (KHÔNG đẩy GitHub). Thay tab Scenarios cũ.
+  const savePALocal=useCallback(async()=>{
+    const r=resultRef.current;
+    const nameDefault=`PA ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}`;
+    const label=window.prompt('💾 Đặt tên bản nháp (lưu trên máy này):',nameDefault);
+    if(label===null) return;
+    try{
+      const drafts=JSON.parse(localStorage.getItem('pakd_local_drafts')||'[]');
+      drafts.unshift({
+        id:'d'+Date.now(),
+        label:label.trim()||nameDefault,
+        savedAt:new Date().toISOString(),
+        inputs,products,
+        snapshot:{totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0},
+      });
+      localStorage.setItem('pakd_local_drafts',JSON.stringify(drafts.slice(0,100)));
+      setLocalDrafts(drafts.slice(0,100));
+      alert('✓ Đã lưu nháp trên máy này (localStorage). Mở bằng nút "💾 Nháp Local".');
+    }catch(e){ alert('❌ Lỗi lưu nháp: '+e.message); }
+  },[inputs,products]);
+
+  // TRÌNH DUYỆT: đẩy PA lên GitHub + ký bước 1 luồng MUA.
+  const submitPAToGithub=useCallback(async()=>{
+    const apList=approvers.length?approvers:await loadApprovers();
+    const prog=approvalProgress(apList,[],'buy');
+    if(prog.empty){alert('⚠ Chưa thiết lập người duyệt cho luồng MUA. Vào ⚙️ GitHub → "Quản lý người duyệt", đặt Bước duyệt luồng MUA cho ít nhất 1 người.');return;}
+    const first=prog.nextApprover; // bước 1 luồng mua (stepBuy nhỏ nhất)
+    if(!window.confirm(`Trình duyệt PA — ký BƯỚC 1 (luồng Mua):\n\n${first.name} — ${first.role}\n\nOK để tiếp tục.`)) return;
+    const opinion=window.prompt(`📝 Ý kiến đề xuất của ${first.name} (${first.role}):\n\nVí dụ: "Đề xuất mua, giá CIF tốt, cần hàng gấp."`);
+    if(opinion===null) return;
+    const pin=await askPin(`🔐 Nhập PIN riêng của ${first.name} để ký bước 1:`);
+    if(pin===null) return;
+    const ok=await verifyApproverPin(first.id,pin);
+    if(!ok){alert('❌ PIN SAI — không ký được bước 1.');return;}
     setGhStatus(p=>({...p,loading:true,error:null}));
     try{
       const now=new Date();
       const pad=n=>String(n).padStart(2,'0');
       const fname=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}h${pad(now.getMinutes())}.json`;
-      const path=`contents/plans/${fname}`;
       const r=resultRef.current;
-      const approvals=submitMode?[{order:sender.order,id:sender.id,name:sender.name,role:sender.role,decision:'approved',opinion:(opinion||'').trim(),at:now.toISOString()}]:[];
+      const approvals=[{step:stepOf(first,'buy'),id:first.id,name:first.name,role:first.role,decision:'approved',opinion:(opinion||'').trim(),at:now.toISOString()}];
+      const prog2=approvalProgress(apList,approvals,'buy');
       const payload={
-        savedAt:now.toISOString(),
-        savedBy:submitMode?sender.name:(inputs.creator||'?'),
-        requestedBy:submitMode?sender.name:(inputs.creator||'?'),
-        requestNote:submitMode?(opinion||'').trim()||null:null,
-        version:'PAKD 7.6',
-        status:submitMode?'pending':'draft',   // draft = nháp; pending = đang trình duyệt
-        approvals,
-        approvedBy:null,approvedAt:null,approveNote:null,
+        savedAt:now.toISOString(),savedBy:first.name,requestedBy:first.name,
+        requestNote:(opinion||'').trim()||null,version:'PAKD 7.7',flow:'buy',
+        status:prog2.done?'approved':'pending',
+        approvals,approvedBy:prog2.done?first.name:null,approvedAt:prog2.done?now.toISOString():null,approveNote:null,
         inputs,products,
         snapshot:{inventoryCount:inventory.length,totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0}
       };
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-      await ghAPI('PUT',path,{message:`${submitMode?'Trình duyệt':'Lưu nháp'} PA ${fname}`,content:contentB64,branch:ghConfig.branch||'main'});
-      setGhStatus(p=>({...p,loading:false,lastAction:`✓ ${submitMode?'Đã trình duyệt':'Đã lưu nháp'} ${fname}`}));
-      alert(`✓ ${submitMode?'ĐÃ TRÌNH DUYỆT':'ĐÃ LƯU NHÁP'} thành công!\nFile: ${fname}${submitMode?`\n\nĐã ký bước 1: ${sender.name}. Chuyển đến bước kế tiếp.`:'\n\n(Bản nháp — chưa trình ai. Mở "Tải PA cloud" để trình duyệt sau.)'}`);
+      await ghAPI('PUT',`contents/plans/${fname}`,{message:`Trình duyệt PA ${fname} — ký bước 1 ${first.name}`,content:contentB64,branch:ghConfig.branch||'main'});
+      setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã trình duyệt ${fname}`}));
+      alert(`✓ ĐÃ TRÌNH DUYỆT!\nFile: ${fname}\n\nĐã ký bước 1: ${first.name}.${prog2.done?' (đủ cấp luôn)':' Chuyển bước kế tiếp.'}`);
     }catch(e){
       setGhStatus(p=>({...p,loading:false,error:e.message}));
-      alert(`❌ Lỗi khi lưu PA:\n${e.message}`);
+      alert(`❌ Lỗi khi trình duyệt:\n${e.message}`);
     }
   },[ghAPI,inputs,products,inventory,ghConfig.branch,approvers,loadApprovers,verifyApproverPin]);
   // List các PA đã lưu (kèm fetch metadata: status, requestedBy, requestNote)
@@ -1610,7 +1667,7 @@ const App=()=>{
       setPinStatus(p=>({...p,setupOpen:true,pendingAction:{type:'PA',file,newStatus,note}}));
       return;
     }
-    const pin=prompt(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} PA\n\nFile: ${file.name}\n\n(PIN do Giám đốc giữ)`);
+    const pin=await askPin(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} PA — File: ${file.name}`);
     if(!pin) return;
     const ok=await verifyPin(pin);
     if(!ok){alert('❌ PIN SAI. Không có quyền duyệt PA.');return;}
@@ -1662,17 +1719,18 @@ const App=()=>{
       const approvals=Array.isArray(payload.approvals)?payload.approvals:[];
       // chặn ký trùng & ký sai thứ tự
       if(approvals.some(a=>a.id===approverId&&a.decision==='approved')){alert('⚠ Người này đã ký duyệt rồi.');setGhStatus(p=>({...p,loading:false}));return false;}
-      const prog=approvalProgress(apList,approvals);
+      const flow=payload.flow||'buy';
+      const prog=approvalProgress(apList,approvals,flow);
       if(prog.rejected){alert('⚠ PA đã bị từ chối ở bước trước.');setGhStatus(p=>({...p,loading:false}));return false;}
       if(decision==='approved'&&prog.nextApprover&&prog.nextApprover.id!==approverId){
         alert(`⚠ Chưa tới lượt. Đang chờ: ${prog.nextApprover.name} (${prog.nextApprover.role}).`);setGhStatus(p=>({...p,loading:false}));return false;
       }
-      approvals.push({order:ap.order,id:ap.id,name:ap.name,role:ap.role,decision,opinion:(opinion||'').trim(),at:new Date().toISOString()});
+      approvals.push({step:stepOf(ap,flow),id:ap.id,name:ap.name,role:ap.role,decision,opinion:(opinion||'').trim(),at:new Date().toISOString()});
       payload.approvals=approvals;
       // cập nhật status tổng
-      const prog2=approvalProgress(apList,approvals);
+      const prog2=approvalProgress(apList,approvals,flow);
       payload.status=prog2.rejected?'rejected':prog2.done?'approved':'pending';
-      payload.approvedBy=prog2.done?apList.map(a=>a.name).join(' → '):null;
+      payload.approvedBy=prog2.done?(prog2.chain||[]).map(a=>a.name).join(' → '):null;
       payload.approvedAt=prog2.done?new Date().toISOString():null;
       const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
       await ghAPI('PUT',`contents/plans/${file.name}`,{
@@ -1723,6 +1781,20 @@ const App=()=>{
   // approvals của PA đang tải (để in vào A4); modal cho ý kiến
   const [loadedApprovals,setLoadedApprovals]=useState([]);
   const [approveModal,setApproveModal]=useState({open:false,file:null,approver:null});
+  // Nháp local (localStorage) — thay tab Scenarios
+  const [localDrafts,setLocalDrafts]=useState(()=>{try{return JSON.parse(localStorage.getItem('pakd_local_drafts')||'[]');}catch(e){return [];}});
+  const [draftModalOpen,setDraftModalOpen]=useState(false);
+  // Modal nhập PIN ẩn chữ (thay window.prompt). askPin trả Promise<string|null>.
+  const [pinPrompt,setPinPrompt]=useState({open:false,message:'',resolve:null});
+  const pinResolveRef=useRef(null);
+  const askPin=useCallback((message)=>new Promise(resolve=>{
+    pinResolveRef.current=resolve;
+    setPinPrompt({open:true,message,resolve});
+  }),[]);
+  const closePinPrompt=useCallback((val)=>{
+    setPinPrompt({open:false,message:'',resolve:null});
+    if(pinResolveRef.current){pinResolveRef.current(val);pinResolveRef.current=null;}
+  },[]);
   // Helper: hash chuỗi bằng SHA-256 (browser native)
   const sha256=async(text)=>{
     const enc=new TextEncoder().encode(text);
@@ -1803,36 +1875,36 @@ const App=()=>{
     const res=await ghAPI('PUT','contents/config/approvers.json',body);
     setApvSha(res.content?.sha||null);
   },[ghAPI,ghConfig.branch,apvSha]);
-  // Vai trò có quyền quản trị (thêm/xóa người duyệt): chứa "giám đốc" hoặc "quản trị"
-  const isAdminRole=useCallback((role)=>{
-    const r=stripVN(role||'');
+  // Người có quyền quản trị: cờ isAdmin=true HOẶC vai trò chứa "giám đốc"/"quản trị" (tương thích cũ)
+  const isAdminPerson=useCallback((a)=>{
+    if(a&&a.isAdmin) return true;
+    const r=stripVN(a&&a.role||'');
     return r.includes('giamdoc')||r.includes('quantri')||r.includes('admin');
   },[]);
-  // Xác thực PIN quản trị: khớp PIN của BẤT KỲ người nào có vai trò quản trị.
+  // Xác thực PIN quản trị: khớp PIN của BẤT KỲ người nào là quản trị.
   // Trả {ok, by}. Nếu danh sách trống → ok=true (khởi tạo người đầu tiên).
   const verifyAdminPin=useCallback(async(pin)=>{
     const list=approvers.length?approvers:await loadApprovers();
     if(list.length===0) return {ok:true,by:'(khởi tạo)'};
-    const admins=list.filter(a=>isAdminRole(a.role));
-    if(admins.length===0){
-      // Chưa có ai là quản trị/GĐ → tạm cho người order cao nhất làm admin
-      const top=list.slice().sort((a,b)=>(b.order||0)-(a.order||0))[0];
-      if(top){const h=await sha256(pin);return {ok:h===top.pinHash,by:top.name};}
-      return {ok:false,by:null};
-    }
+    const admins=list.filter(a=>isAdminPerson(a));
+    const pool=admins.length>0?admins:list; // chưa ai là admin → chấp nhận PIN bất kỳ ai (tránh khóa cứng)
     const h=await sha256(pin);
-    const matched=admins.find(a=>a.pinHash===h);
+    const matched=pool.find(a=>a.pinHash===h);
     return {ok:!!matched,by:matched?matched.name:null};
-  },[approvers,loadApprovers,isAdminRole,sha256]);
+  },[approvers,loadApprovers,isAdminPerson,sha256]);
 
-  // Thêm 1 người duyệt mới (tên, vai trò, PIN). Cần PIN quản trị (trừ người đầu tiên).
-  const addApprover=useCallback(async(name,role,pin)=>{
-    if(!name.trim()||!role.trim()){alert('❌ Nhập đủ Tên và Vai trò');return false;}
+  // Thêm 1 người duyệt mới. opts={name,role,pin,isAdmin,stepBuy,stepFloor}. Cần PIN quản trị (trừ người đầu tiên).
+  const addApprover=useCallback(async(opts)=>{
+    const {name,role,pin}=opts;
+    const isAdmin=!!opts.isAdmin;
+    const stepBuy=parseInt(opts.stepBuy)||0;
+    const stepFloor=parseInt(opts.stepFloor)||0;
+    if(!name||!name.trim()||!role||!role.trim()){alert('❌ Nhập đủ Tên và Vai trò');return false;}
     if(!/^\d{4,8}$/.test(pin)){alert('❌ PIN phải là 4–8 chữ số');return false;}
     const cur=approvers.length?approvers:await loadApprovers();
     // Khóa quản trị: nếu đã có người trong danh sách → cần PIN của Giám đốc/Quản trị
     if(cur.length>0){
-      const adminPin=window.prompt('🔐 Thao tác này cần quyền QUẢN TRỊ.\nNhập PIN của Giám đốc / Quản trị để xác nhận THÊM người duyệt:');
+      const adminPin=await askPin('🔐 Cần quyền QUẢN TRỊ. Nhập PIN của Giám đốc / Quản trị để THÊM người duyệt:');
       if(adminPin===null) return false;
       const chk=await verifyAdminPin(adminPin);
       if(!chk.ok){alert('❌ PIN quản trị SAI. Không có quyền thêm người duyệt.');return false;}
@@ -1842,11 +1914,11 @@ const App=()=>{
     try{
       const pinHash=await sha256(pin);
       const maxOrder=cur.reduce((m,a)=>Math.max(m,a.order||0),0);
-      const next=[...cur,{id,name:name.trim(),role:role.trim(),order:maxOrder+1,pinHash}];
+      const next=[...cur,{id,name:name.trim(),role:role.trim(),order:maxOrder+1,pinHash,isAdmin,stepBuy,stepFloor}];
       await saveApprovers(next);
       setApprovers(next);
       setApvStatus(p=>({...p,loading:false}));
-      alert(`✓ Đã thêm người duyệt: ${name.trim()} (${role.trim()})`);
+      alert(`✓ Đã thêm: ${name.trim()} (${role.trim()})${isAdmin?' · Quản trị':''}${stepBuy?' · Mua bước '+stepBuy:''}${stepFloor?' · Sàn bước '+stepFloor:''}`);
       return true;
     }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); return false; }
   },[approvers,loadApprovers,saveApprovers,sha256,verifyAdminPin]);
@@ -1854,7 +1926,7 @@ const App=()=>{
   const removeApprover=useCallback(async(id)=>{
     const cur=approvers.length?approvers:await loadApprovers();
     const target=cur.find(a=>a.id===id);
-    const adminPin=window.prompt(`🔐 Thao tác này cần quyền QUẢN TRỊ.\nNhập PIN của Giám đốc / Quản trị để xác nhận XÓA: ${target?target.name+' ('+target.role+')':''}`);
+    const adminPin=await askPin(`🔐 Cần quyền QUẢN TRỊ. Nhập PIN của Giám đốc / Quản trị để XÓA: ${target?target.name+' ('+target.role+')':''}`);
     if(adminPin===null) return;
     const chk=await verifyAdminPin(adminPin);
     if(!chk.ok){alert('❌ PIN quản trị SAI. Không có quyền xóa người duyệt.');return;}
@@ -1864,6 +1936,20 @@ const App=()=>{
       await saveApprovers(next); setApprovers(next);
       setApvStatus(p=>({...p,loading:false}));
       alert(`✓ Đã xóa (xác nhận bởi ${chk.by}).`);
+    }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); }
+  },[approvers,loadApprovers,saveApprovers,verifyAdminPin]);
+  // Sửa bước duyệt / cờ quản trị của 1 người (cần PIN quản trị). patch={stepBuy?,stepFloor?,isAdmin?}
+  const updateApproverFields=useCallback(async(id,patch)=>{
+    const adminPin=await askPin('🔐 Cần quyền QUẢN TRỊ để đổi bước duyệt / quyền. Nhập PIN Giám đốc / Quản trị:');
+    if(adminPin===null) return;
+    const chk=await verifyAdminPin(adminPin);
+    if(!chk.ok){alert('❌ PIN quản trị SAI.');return;}
+    setApvStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const cur=approvers.length?approvers:await loadApprovers();
+      const next=cur.map(a=>a.id===id?{...a,...patch}:a);
+      await saveApprovers(next); setApprovers(next);
+      setApvStatus(p=>({...p,loading:false}));
     }catch(e){ setApvStatus(p=>({...p,loading:false,error:e.message})); alert('❌ Lỗi: '+e.message); }
   },[approvers,loadApprovers,saveApprovers,verifyAdminPin]);
   // Xác thực PIN của 1 người duyệt cụ thể (theo id)
@@ -1985,7 +2071,7 @@ const App=()=>{
       alert('⚠ Chưa có PIN duyệt được thiết lập. Vào ⚙️ GitHub → Kiểm tra/Thiết lập PIN.');
       return;
     }
-    const pin=prompt(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} SÀN\n\nFile: ${file.name}\n\n(PIN do Giám đốc giữ)`);
+    const pin=await askPin(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} SÀN — File: ${file.name}`);
     if(!pin) return;
     const ok=await verifyPin(pin);
     if(!ok){alert('❌ PIN SAI. Không có quyền duyệt.');return;}
@@ -2891,7 +2977,6 @@ URL.revokeObjectURL(url);
             {k:'floor',l:'💹 Giá Sàn'},
             {k:'cashflow',l:'💰 Dòng Tiền'},
             {k:'po',l:poData.length>0?`📑 PO (${poData.length})`:'📑 PO đã ký'},
-            {k:'scenario',l:'💾 Scenarios'},
             {k:'floorhistory',l:'🗓️ Lịch sử Sàn'},
             {k:'report',l:limitsWarnings.totalAlerts>0?`📈 BC ⚠${limitsWarnings.totalAlerts}`:'📈 Báo cáo'},
           ].map(t=>(
@@ -3043,8 +3128,10 @@ URL.revokeObjectURL(url);
                   <button className="btn btn-ghost btn-sm" onClick={addProduct}><Ic.Plus/> Thêm SKU</button>
                   {/* ─── Cloud PA ─── (chỉ thuộc tab PAKD Mua) */}
                   <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
-                  <button className="btn btn-purple btn-sm" onClick={savePAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Lưu nháp hoặc trình duyệt PA mua hiện tại':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
-                    {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'☁️'} Lưu &amp; Trình duyệt
+                  <button className="btn btn-ghost btn-sm" onClick={savePALocal} title="Lưu nháp PA trên máy này (không cần GitHub)" style={{padding:'4px 9px',fontSize:'.72rem',background:'#f1f5f9',border:'1px solid #cbd5e1'}}>💾 Lưu Local</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setDraftModalOpen(true)} title="Mở danh sách bản nháp đã lưu trên máy" style={{padding:'4px 9px',fontSize:'.72rem',background:'#f1f5f9',border:'1px solid #cbd5e1'}}>📁 Nháp Local{localDrafts.length>0?` (${localDrafts.length})`:''}</button>
+                  <button className="btn btn-purple btn-sm" onClick={submitPAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Trình duyệt PA — gửi vào luồng duyệt, ký bước 1':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                    {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'📤'} Trình duyệt
                   </button>
                   <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải / duyệt danh sách PA trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
                     📂 Tải PA cloud
@@ -4535,8 +4622,8 @@ URL.revokeObjectURL(url);
           );
         })()}
 
-        {/* ════ TAB SCENARIOS ════ */}
-        {tab==='scenario'&&(
+        {/* ════ TAB SCENARIOS — ĐÃ BỎ (thay bằng nút 💾 Lưu Local / 📁 Nháp Local) ════ */}
+        {false&&(
           <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1060px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:15}}>
@@ -5137,16 +5224,29 @@ URL.revokeObjectURL(url);
               <div style={{textAlign:'center',padding:'18px',color:'#94a3b8',fontWeight:600,fontSize:'.78rem',background:'#f8fafc',borderRadius:6,marginBottom:14}}>Chưa có người duyệt nào. Thêm bên dưới (theo thứ tự: Mua hàng → TP Kinh doanh → Giám đốc).</div>
             ):(
               <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:14}}>
-                {approvers.map((a,i)=>(
-                  <div key={a.id} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:7,padding:'8px 12px'}}>
-                    <span style={{width:24,height:24,borderRadius:'50%',background:'#1d4ed8',color:'#fff',fontWeight:900,fontSize:'.8rem',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{a.order||i+1}</span>
+                {approvers.map((a,i)=>{
+                  const sb=(a.stepBuy!==undefined&&a.stepBuy!==null&&a.stepBuy!=='')?parseInt(a.stepBuy)||0:(parseInt(a.order)||0);
+                  const sf=parseInt(a.stepFloor)||0;
+                  const adm=a.isAdmin||/giamdoc|quantri|admin/.test(stripVN(a.role||''));
+                  return(
+                  <div key={a.id} style={{display:'flex',alignItems:'center',gap:10,background:adm?'#faf5ff':'#f8fafc',border:`1px solid ${adm?'#d8b4fe':'#e2e8f0'}`,borderRadius:7,padding:'8px 12px'}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:800,fontSize:'.84rem',color:'#0f172a'}}>{a.name}</div>
-                      <div style={{fontSize:'.68rem',color:'#475569',fontWeight:600}}>{a.role} · 🔒 PIN đã đặt</div>
+                      <div style={{fontWeight:800,fontSize:'.84rem',color:'#0f172a'}}>{a.name} {adm&&<span style={{fontSize:'.58rem',fontWeight:900,background:'#f3e8ff',color:'#6d28d9',border:'1px solid #d8b4fe',borderRadius:4,padding:'1px 5px',marginLeft:4}}>QUẢN TRỊ</span>}</div>
+                      <div style={{fontSize:'.68rem',color:'#475569',fontWeight:600,marginBottom:4}}>{a.role} · 🔒 PIN đã đặt</div>
+                      <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
+                        <label style={{fontSize:'.64rem',fontWeight:700,color:'#1d4ed8',display:'flex',alignItems:'center',gap:3}}>Mua:
+                          <select value={String(sb)} onChange={e=>updateApproverFields(a.id,{stepBuy:parseInt(e.target.value)||0})} className="inp inp-xs" style={{width:'auto',padding:'1px 4px',fontSize:'.64rem'}}>{['0','1','2','3','4','5'].map(s=><option key={s} value={s}>{s==='0'?'—':'B'+s}</option>)}</select>
+                        </label>
+                        <label style={{fontSize:'.64rem',fontWeight:700,color:'#0d9488',display:'flex',alignItems:'center',gap:3}}>Sàn:
+                          <select value={String(sf)} onChange={e=>updateApproverFields(a.id,{stepFloor:parseInt(e.target.value)||0})} className="inp inp-xs" style={{width:'auto',padding:'1px 4px',fontSize:'.64rem'}}>{['0','1','2','3','4','5'].map(s=><option key={s} value={s}>{s==='0'?'—':'B'+s}</option>)}</select>
+                        </label>
+                        <label style={{fontSize:'.64rem',fontWeight:700,color:'#6d28d9',display:'flex',alignItems:'center',gap:3,cursor:'pointer'}}>
+                          <input type="checkbox" checked={!!a.isAdmin} onChange={e=>updateApproverFields(a.id,{isAdmin:e.target.checked})}/> Quản trị
+                        </label>
+                      </div>
                     </div>
                     <button className="btn-danger" onClick={()=>removeApprover(a.id)} disabled={apvStatus.loading} title="Xóa người này"><Ic.X/></button>
-                  </div>
-                ))}
+                  </div>);})}
               </div>
             )}
             {/* Form thêm người */}
@@ -5227,10 +5327,11 @@ URL.revokeObjectURL(url);
                           {/* Thanh tiến trình duyệt tuần tự */}
                           {approvers.length>0&&(()=>{
                             const acts=f._approvals||[];
-                            const prog=approvalProgress(approvers,acts);
+                            const prog=approvalProgress(approvers,acts,'buy');
+                            if(prog.empty) return <div style={{fontSize:'.6rem',color:'#b45309',fontWeight:700,marginTop:4}}>⚠ Chưa đặt bước duyệt luồng MUA</div>;
                             return(
                               <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5,alignItems:'center'}}>
-                                {approvers.map(ap=>{
+                                {prog.chain.map(ap=>{
                                   const act=acts.find(a=>a.id===ap.id);
                                   const isNext=prog.nextApprover&&prog.nextApprover.id===ap.id&&!prog.rejected;
                                   const bg=act?(act.decision==='approved'?'#dcfce7':'#fee2e2'):isNext?'#fef9c3':'#f1f5f9';
@@ -5252,8 +5353,8 @@ URL.revokeObjectURL(url);
                           <button className="btn btn-purple btn-xs" onClick={()=>loadPAFromGithub(f)} disabled={ghStatus.loading} style={{fontSize:'.65rem'}}>⬇ Tải</button>
                           {(()=>{
                             const acts=f._approvals||[];
-                            const prog=approvalProgress(approvers,acts);
-                            if(approvers.length===0) return <span style={{fontSize:'.58rem',color:'#b45309',fontWeight:700,maxWidth:90,textAlign:'right'}}>⚠ Chưa có người duyệt</span>;
+                            const prog=approvalProgress(approvers,acts,'buy');
+                            if(approvers.length===0||prog.empty) return <span style={{fontSize:'.58rem',color:'#b45309',fontWeight:700,maxWidth:90,textAlign:'right'}}>⚠ Chưa đặt bước MUA</span>;
                             if(prog.rejected) return <span style={{fontSize:'.6rem',color:'#991b1b',fontWeight:800}}>Đã từ chối</span>;
                             if(prog.done) return <span style={{fontSize:'.6rem',color:'#14532d',fontWeight:800}}>✓ Duyệt đủ cấp</span>;
                             const nx=prog.nextApprover;
@@ -5270,6 +5371,40 @@ URL.revokeObjectURL(url);
               <span style={{fontSize:'.68rem',color:'#64748b'}}>⚠️ Tải PA sẽ ghi đè PA hiện tại.</span>
               <button className="btn btn-ghost btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading}>🔄 Refresh</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: NHẬP PIN ẨN CHỮ */}
+      {pinPrompt.open&&(
+        <PinPromptModal message={pinPrompt.message} onSubmit={pin=>closePinPrompt(pin)} onCancel={()=>closePinPrompt(null)}/>
+      )}
+
+      {/* MODAL: NHÁP LOCAL (thay tab Scenarios) */}
+      {draftModalOpen&&(
+        <div onClick={()=>setDraftModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📁 Bản nháp PA trên máy ({localDrafts.length})</h3>
+              <button onClick={()=>setDraftModalOpen(false)} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+            </div>
+            <div style={{fontSize:'.7rem',color:'#475569',marginBottom:12,background:'#f1f5f9',borderRadius:6,padding:'8px 12px',lineHeight:1.5}}>💡 Bản nháp chỉ lưu trên trình duyệt máy này (không lên GitHub). Tải về để chỉnh tiếp hoặc Trình duyệt.</div>
+            {localDrafts.length===0?(
+              <div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có bản nháp nào. Nhấn "💾 Lưu Local" để tạo.</div>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {localDrafts.map((d,i)=>(
+                  <div key={d.id} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:7,padding:'9px 12px'}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,fontSize:'.82rem',color:'#0f172a'}}>{d.label}</div>
+                      <div style={{fontSize:'.66rem',color:'#475569',fontWeight:600,marginTop:2}}>{d.savedAt?new Date(d.savedAt).toLocaleString('vi-VN'):''} · {d.snapshot?fv(d.snapshot.totalKg)+'kg · '+fv((d.snapshot.totalVND||0)/1e6)+'tr':''}</div>
+                    </div>
+                    <button className="btn btn-purple btn-xs" onClick={()=>{if(d.inputs)setInputs(d.inputs);if(d.products)setProducts(d.products);setDraftModalOpen(false);setTab('main');alert('✓ Đã tải nháp "'+d.label+'" vào màn hình.');}} style={{fontSize:'.65rem'}}>⬇ Tải</button>
+                    <button className="btn-danger" onClick={()=>{const next=localDrafts.filter(x=>x.id!==d.id);setLocalDrafts(next);try{localStorage.setItem('pakd_local_drafts',JSON.stringify(next));}catch(e){}}} title="Xóa nháp này"><Ic.X/></button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
