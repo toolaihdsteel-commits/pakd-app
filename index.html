@@ -249,7 +249,8 @@ function ApprovalModal({file,approver,loading,onClose,onSubmit}){
           <button onClick={onClose} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
         </div>
         <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'8px 12px',marginBottom:12,fontSize:'.74rem',color:'#1e40af',fontWeight:700,lineHeight:1.5}}>
-          Bạn đang ký với tư cách:<br/><span style={{fontSize:'.9rem',fontWeight:900,color:'#0f172a'}}>{approver.name} — {approver.role}</span><br/>
+          🔐 Nhập PIN của bạn — hệ thống tự nhận diện bạn là ai & bước duyệt.<br/>
+          {approver&&<span style={{fontSize:'.66rem',fontWeight:600,color:'#475569'}}>Đang chờ bước kế: <strong>{approver.name} — {approver.role}</strong>. (Bước cao hơn có thể duyệt vượt.)<br/></span>}
           <span style={{fontSize:'.66rem',fontWeight:600,color:'#475569'}}>File: {file?.name}</span>
         </div>
         <div style={{marginBottom:10}}>
@@ -257,7 +258,7 @@ function ApprovalModal({file,approver,loading,onClose,onSubmit}){
           <textarea className="inp" rows={3} placeholder="Ví dụ: Đồng ý mua, giá tốt. / Cần xem lại giá CIF mác A5052." value={opinion} onChange={e=>setOpinion(e.target.value)} style={{resize:'vertical',lineHeight:1.4}}/>
         </div>
         <div style={{marginBottom:14}}>
-          <label className="lbl">PIN riêng của {approver.name}</label>
+          <label className="lbl">PIN của bạn (4–8 số)</label>
           <input type="password" className="inp" placeholder="Nhập PIN 4–8 số" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,'').substring(0,8))} style={{fontFamily:'JetBrains Mono',fontSize:'.95rem',letterSpacing:'.2em',textAlign:'center'}}/>
         </div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
@@ -444,14 +445,35 @@ const stepOf=(ap,flow)=>{
   if(sb!==undefined&&sb!==null&&sb!=='') return parseInt(sb)||0;
   return parseInt(ap.order)||0; // fallback dữ liệu cũ
 };
+// SHA-256 (browser native) — module scope để mọi useCallback dùng được, tránh TDZ.
+const sha256=async(text)=>{
+  const enc=new TextEncoder().encode(text);
+  const buf=await crypto.subtle.digest('SHA-256',enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+};
 // Tiến trình duyệt theo luồng (mặc định 'buy'). Chỉ tính người có step>0.
+// SỬA #2 (R3): Bước CAO NHẤT của luồng = người quyết định cuối.
+//  • Người bước cao nhất ký → XONG ngay (bỏ qua mọi bước còn lại).
+//  • Người bước thấp ký → chuyển lên bước CAO HƠN gần nhất chưa ký, cho tới bước cao nhất.
+//  • Người trình/ký ở bước N → bỏ qua các bước < N; người kế tiếp là bước nhỏ nhất > (bước cao nhất đã ký).
 const approvalProgress=(approvers,approvals,flow='buy')=>{
   const apvs=(approvers||[]).filter(a=>stepOf(a,flow)>0).slice().sort((a,b)=>stepOf(a,flow)-stepOf(b,flow));
   const acts=approvals||[];
   const rejected=acts.some(a=>a.decision==='rejected');
-  if(rejected) return {done:false,rejected:true,nextApprover:null,chain:apvs};
-  const next=apvs.find(ap=>!acts.some(a=>a.id===ap.id&&a.decision==='approved'));
-  return {done:apvs.length>0&&!next,rejected:false,nextApprover:next||null,chain:apvs,empty:apvs.length===0};
+  if(rejected) return {done:false,rejected:true,nextApprover:null,chain:apvs,maxStep:null,topSigned:null};
+  if(apvs.length===0) return {done:false,rejected:false,nextApprover:null,chain:apvs,empty:true,maxStep:null,topSigned:null};
+  const maxStep=Math.max(...apvs.map(a=>stepOf(a,flow)));         // bước cao nhất của luồng
+  // Bước cao nhất ĐÃ KÝ duyệt
+  const signedSteps=acts.filter(a=>a.decision==='approved').map(a=>{
+    const ap=(approvers||[]).find(x=>x.id===a.id);
+    return ap?stepOf(ap,flow):(parseInt(a.step)||0);
+  }).filter(s=>s>0);
+  const topSigned=signedSteps.length?Math.max(...signedSteps):0;
+  // XONG khi bước cao nhất của luồng đã ký
+  if(topSigned>=maxStep) return {done:true,rejected:false,nextApprover:null,chain:apvs,maxStep,topSigned,empty:false};
+  // Chưa xong → người kế tiếp = bước NHỎ NHẤT > topSigned (bỏ qua mọi bước <= topSigned)
+  const next=apvs.find(ap=>stepOf(ap,flow)>topSigned&&!acts.some(a=>a.id===ap.id&&a.decision==='approved'));
+  return {done:false,rejected:false,nextApprover:next||null,chain:apvs,maxStep,topSigned,empty:false};
 };
 
 const weightedAvg=rows=>{
@@ -1624,44 +1646,47 @@ const App=()=>{
     alert(`✓ Đã tải Sàn ${d.weekLabel||fileName||''} vào màn hình.\n• Tỷ giá: ${d.exchangeRate?Number(d.exchangeRate).toLocaleString('vi-VN'):'—'}\n• Trừ TL có PO: ${d.excludePOFloor?'CÓ':'KHÔNG'}\n• Đã nạp ${Object.keys(ov||{}).length} nhóm Sàn ban hành.`);
   },[]);
 
-  // TRÌNH DUYỆT: đẩy PA lên GitHub + ký bước 1 luồng MUA.
+  // TRÌNH DUYỆT — SỬA #3b,c (R3): người trình TỰ NHẬN DIỆN BẰNG PIN, ký bước CỦA MÌNH (không buộc bước 1).
   const submitPAToGithub=useCallback(async()=>{
     const apList=approvers.length?approvers:await loadApprovers();
-    const prog=approvalProgress(apList,[],'buy');
-    if(prog.empty){alert('⚠ Chưa thiết lập người duyệt cho luồng MUA. Vào ⚙️ GitHub → "Quản lý người duyệt", đặt Bước duyệt luồng MUA cho ít nhất 1 người.');return;}
-    const first=prog.nextApprover; // bước 1 luồng mua (stepBuy nhỏ nhất)
-    if(!window.confirm(`Trình duyệt PA — ký BƯỚC 1 (luồng Mua):\n\n${first.name} — ${first.role}\n\nOK để tiếp tục.`)) return;
-    const opinion=window.prompt(`📝 Ý kiến đề xuất của ${first.name} (${first.role}):\n\nVí dụ: "Đề xuất mua, giá CIF tốt, cần hàng gấp."`);
-    if(opinion===null) return;
-    const pin=await askPin(`🔐 Nhập PIN riêng của ${first.name} để ký bước 1:`);
+    const prog0=approvalProgress(apList,[],'buy');
+    if(prog0.empty){alert('⚠ Chưa thiết lập người duyệt cho luồng MUA. Vào ⚙️ GitHub → "Quản lý người duyệt", đặt Bước duyệt luồng MUA cho ít nhất 1 người.');return;}
+    // 1. Nhập PIN → tự nhận diện người trình
+    const pin=await askPin('🔐 Nhập PIN của bạn để TRÌNH duyệt PA (hệ thống tự nhận diện bạn là ai):');
     if(pin===null) return;
-    const ok=await verifyApproverPin(first.id,pin);
-    if(!ok){alert('❌ PIN SAI — không ký được bước 1.');return;}
+    const hash=await sha256(pin);
+    const me=apList.find(a=>a.pinHash===hash);
+    if(!me){alert('❌ PIN không khớp người duyệt nào. Không trình được.');return;}
+    if(stepOf(me,'buy')<=0){alert(`⚠ Bạn (${me.name}) không nằm trong luồng duyệt MUA (chưa đặt Bước duyệt luồng MUA).`);return;}
+    // 2. Ý kiến đề xuất
+    const opinion=window.prompt(`📝 Ý kiến đề xuất của ${me.name} (${me.role} — bước ${stepOf(me,'buy')}):\n\nVí dụ: "Đề xuất mua, giá CIF tốt, cần hàng gấp."`);
+    if(opinion===null) return;
     setGhStatus(p=>({...p,loading:true,error:null}));
     try{
       const now=new Date();
       const pad=n=>String(n).padStart(2,'0');
       const fname=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}h${pad(now.getMinutes())}.json`;
       const r=resultRef.current;
-      const approvals=[{step:stepOf(first,'buy'),id:first.id,name:first.name,role:first.role,decision:'approved',opinion:(opinion||'').trim(),at:now.toISOString()}];
+      // Người trình ký bước CỦA MÌNH → các bước < bước này bị bỏ qua.
+      const approvals=[{step:stepOf(me,'buy'),id:me.id,name:me.name,role:me.role,decision:'approved',opinion:(opinion||'').trim(),at:now.toISOString(),isSubmitter:true}];
       const prog2=approvalProgress(apList,approvals,'buy');
       const payload={
-        savedAt:now.toISOString(),savedBy:first.name,requestedBy:first.name,
-        requestNote:(opinion||'').trim()||null,version:'PAKD 7.7',flow:'buy',
+        savedAt:now.toISOString(),savedBy:me.name,requestedBy:me.name,requestedByStep:stepOf(me,'buy'),
+        requestNote:(opinion||'').trim()||null,version:'PAKD 7.9',flow:'buy',
         status:prog2.done?'approved':'pending',
-        approvals,approvedBy:prog2.done?first.name:null,approvedAt:prog2.done?now.toISOString():null,approveNote:null,
+        approvals,approvedBy:prog2.done?me.name:null,approvedAt:prog2.done?now.toISOString():null,approveNote:null,
         inputs,products,
         snapshot:{inventoryCount:inventory.length,totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0}
       };
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-      await ghAPI('PUT',`contents/plans/${fname}`,{message:`Trình duyệt PA ${fname} — ký bước 1 ${first.name}`,content:contentB64,branch:ghConfig.branch||'main'});
+      await ghAPI('PUT',`contents/plans/${fname}`,{message:`Trình duyệt PA ${fname} — ${me.name} ký bước ${stepOf(me,'buy')}`,content:contentB64,branch:ghConfig.branch||'main'});
       setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã trình duyệt ${fname}`}));
-      alert(`✓ ĐÃ TRÌNH DUYỆT!\nFile: ${fname}\n\nĐã ký bước 1: ${first.name}.${prog2.done?' (đủ cấp luôn)':' Chuyển bước kế tiếp.'}`);
+      alert(`✓ ĐÃ TRÌNH DUYỆT!\nFile: ${fname}\nBạn: ${me.name} (đã ký bước ${stepOf(me,'buy')}).\n${prog2.done?'🎉 Đủ cấp luôn (bạn là bước cao nhất).':'⏳ Chuyển bước kế: '+(prog2.nextApprover?prog2.nextApprover.name+' ('+prog2.nextApprover.role+')':'?')+'.'}`);
     }catch(e){
       setGhStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi trình duyệt:\n${e.message}`);
     }
-  },[ghAPI,inputs,products,inventory,ghConfig.branch,approvers,loadApprovers,verifyApproverPin]);
+  },[ghAPI,inputs,products,inventory,ghConfig.branch,approvers,loadApprovers,askPin,sha256]);
   // List các PA đã lưu (kèm fetch metadata: status, requestedBy, requestNote)
   const listPAsFromGithub=useCallback(async()=>{
     setGhStatus(p=>({...p,loading:true,error:null}));
@@ -1762,14 +1787,16 @@ const App=()=>{
     }
   },[ghAPI,ghConfig.branch]);
 
-  // ── Việc 1 đợt 2: Ghi 1 lượt ý kiến/duyệt tuần tự vào approvals[] của PA ──
-  // approverId: người đang ký; decision: 'approved'|'rejected'; opinion: ý kiến; pin: PIN riêng người đó.
-  const submitApproval=useCallback(async(file,approverId,decision,opinion,pin)=>{
+  // ── Ghi 1 lượt ý kiến/duyệt vào approvals[] của PA — SỬA #3c (R3): TỰ NHẬN DIỆN người ký BẰNG PIN ──
+  // decision: 'approved'|'rejected'; opinion: ý kiến; pin: PIN của người đang ký (hệ thống tự biết là ai + bước mấy).
+  const submitApproval=useCallback(async(file,decision,opinion,pin)=>{
     const apList=approvers.length?approvers:await loadApprovers();
-    const ap=apList.find(a=>a.id===approverId);
-    if(!ap){alert('⚠ Không tìm thấy người duyệt');return false;}
-    const ok=await verifyApproverPin(approverId,pin);
-    if(!ok){alert('❌ PIN SAI — không đúng người duyệt này.');return false;}
+    // Tự nhận diện người ký qua PIN
+    const hash=await sha256(pin);
+    const ap=apList.find(a=>a.pinHash===hash);
+    if(!ap){alert('❌ PIN không khớp người duyệt nào.');return false;}
+    if(stepOf(ap,'buy')<=0){alert(`⚠ Bạn (${ap.name}) không nằm trong luồng duyệt MUA (chưa đặt Bước duyệt luồng MUA).`);return false;}
+    const approverId=ap.id;
     setGhStatus(p=>({...p,loading:true,error:null}));
     try{
       const data=await ghAPI('GET',`contents/plans/${file.name}`);
@@ -1781,8 +1808,14 @@ const App=()=>{
       const flow=payload.flow||'buy';
       const prog=approvalProgress(apList,approvals,flow);
       if(prog.rejected){alert('⚠ PA đã bị từ chối ở bước trước.');setGhStatus(p=>({...p,loading:false}));return false;}
-      if(decision==='approved'&&prog.nextApprover&&prog.nextApprover.id!==approverId){
-        alert(`⚠ Chưa tới lượt. Đang chờ: ${prog.nextApprover.name} (${prog.nextApprover.role}).`);setGhStatus(p=>({...p,loading:false}));return false;
+      if(prog.done){alert('✓ PA đã được duyệt đủ cấp (bước cao nhất đã ký) rồi.');setGhStatus(p=>({...p,loading:false}));return false;}
+      // SỬA #2 (R3): cho phép ký nếu bước của người này > bước cao nhất đã ký (được nhảy bước, bỏ qua bước thấp hơn).
+      // Chặn nếu bước người này <= bước đã ký (đã bị vượt qua → không cần ý kiến nữa).
+      if(decision==='approved'){
+        const myStep=stepOf(ap,flow);
+        if(myStep<=(prog.topSigned||0)){
+          alert(`⚠ Bước của bạn (${myStep}) đã được vượt qua (bước cao nhất đã ký: ${prog.topSigned}). Không cần ý kiến nữa.`);setGhStatus(p=>({...p,loading:false}));return false;
+        }
       }
       approvals.push({step:stepOf(ap,flow),id:ap.id,name:ap.name,role:ap.role,decision,opinion:(opinion||'').trim(),at:new Date().toISOString()});
       payload.approvals=approvals;
@@ -1805,7 +1838,7 @@ const App=()=>{
       alert(`❌ Lỗi khi ghi ý kiến:\n${e.message}`);
       return false;
     }
-  },[approvers,loadApprovers,verifyApproverPin,ghAPI,ghConfig.branch,listPAsFromGithub]);
+  },[approvers,loadApprovers,sha256,ghAPI,ghConfig.branch,listPAsFromGithub]);
 
   // ═══════════════════════════════════════════════════════
   // WORKFLOW GIÁ SÀN — Pending → Approved → History (theo TUẦN)
@@ -1857,11 +1890,7 @@ const App=()=>{
     if(pinResolveRef.current){pinResolveRef.current(val);pinResolveRef.current=null;}
   },[]);
   // Helper: hash chuỗi bằng SHA-256 (browser native)
-  const sha256=async(text)=>{
-    const enc=new TextEncoder().encode(text);
-    const buf=await crypto.subtle.digest('SHA-256',enc);
-    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-  };
+  // sha256 đã chuyển lên module scope (xem gần stepOf) để tránh TDZ trong các useCallback phía trên.
   // Tải hash PIN từ GitHub (nếu có)
   const loadPinHash=useCallback(async()=>{
     if(!ghConfig.owner||!ghConfig.token) return null;
@@ -2189,30 +2218,35 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false}));
       alert('⚠ Sàn này đã bị từ chối ở bước trước.');return;
     }
-    // 2. Người tới lượt ký
-    const signer=prog.nextApprover;
-    if(!signer){
+    if(prog.done){
       setFloorStatus(p=>({...p,loading:false}));
-      alert('✓ Sàn này đã được duyệt đủ các cấp rồi.');return;
+      alert('✓ Sàn này đã được duyệt đủ cấp (bước cao nhất đã ký) rồi.');return;
     }
-    // 3. Nhập ý kiến (chỉ khi duyệt) + PIN riêng của người tới lượt
-    let opinion='';
-    if(newStatus==='approved'){
-      const op=window.prompt(`📝 Ý kiến của ${signer.name} (${signer.role}) khi duyệt Sàn:\n\nVí dụ: "Đồng ý giá sàn tuần này."`);
-      if(op===null){setFloorStatus(p=>({...p,loading:false}));return;}
-      opinion=op;
-    }else{
-      const op=window.prompt(`📝 Lý do ${signer.name} (${signer.role}) BÁC Sàn này:`);
-      if(op===null){setFloorStatus(p=>({...p,loading:false}));return;}
-      opinion=op;
-    }
-    const pin=await askPin(`🔐 Nhập PIN riêng của ${signer.name} để ${verbTxt.toUpperCase()} Sàn (bước ${stepOf(signer,'floor')}):`);
+    // 2. SỬA #3c (R3): TỰ NHẬN DIỆN người ký BẰNG PIN (không buộc đúng "next"). Bước cao hơn được duyệt vượt.
+    const pin=await askPin(`🔐 Nhập PIN của bạn để ${verbTxt.toUpperCase()} Sàn (hệ thống tự nhận diện bạn là ai & bước):`);
     if(pin===null){setFloorStatus(p=>({...p,loading:false}));return;}
-    const ok=await verifyApproverPin(signer.id,pin);
-    if(!ok){setFloorStatus(p=>({...p,loading:false}));alert(`❌ PIN SAI — không đúng PIN của ${signer.name}. Chưa tới lượt người khác ký.`);return;}
+    const hash=await sha256(pin);
+    const signer=apList.find(a=>a.pinHash===hash);
+    if(!signer){setFloorStatus(p=>({...p,loading:false}));alert('❌ PIN không khớp người duyệt nào.');return;}
+    const myStep=stepOf(signer,'floor');
+    if(myStep<=0){setFloorStatus(p=>({...p,loading:false}));alert(`⚠ Bạn (${signer.name}) không nằm trong luồng duyệt SÀN.`);return;}
+    if(newStatus==='approved'&&myStep<=(prog.topSigned||0)){
+      setFloorStatus(p=>({...p,loading:false}));
+      alert(`⚠ Bước của bạn (${myStep}) đã được vượt qua (bước cao nhất đã ký: ${prog.topSigned}). Không cần ý kiến nữa.`);return;
+    }
+    if(approvalsArr.some(a=>a.id===signer.id&&a.decision==='approved')){
+      setFloorStatus(p=>({...p,loading:false}));alert(`⚠ ${signer.name} đã ký duyệt Sàn này rồi.`);return;
+    }
+    // 3. Nhập ý kiến
+    let opinion='';
+    {
+      const op=window.prompt(newStatus==='approved'?`📝 Ý kiến của ${signer.name} (${signer.role} · bước ${myStep}) khi duyệt Sàn:\n\nVí dụ: "Đồng ý giá sàn tuần này."`:`📝 Lý do ${signer.name} (${signer.role}) BÁC Sàn này:`);
+      if(op===null){setFloorStatus(p=>({...p,loading:false}));return;}
+      opinion=op;
+    }
     try{
       // 4. Ghi 1 lượt ký vào approvals[]
-      approvalsArr.push({step:stepOf(signer,'floor'),id:signer.id,name:signer.name,role:signer.role,decision:newStatus,opinion:(opinion||'').trim(),at:new Date().toISOString()});
+      approvalsArr.push({step:myStep,id:signer.id,name:signer.name,role:signer.role,decision:newStatus,opinion:(opinion||'').trim(),at:new Date().toISOString()});
       payload.approvals=approvalsArr;
       const prog2=approvalProgress(apList,approvalsArr,'floor');
       payload.status=prog2.rejected?'rejected':prog2.done?'approved':'pending';
@@ -2277,7 +2311,7 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi ${verbTxt}:\n${e.message}`);
     }
-  },[ghAPI,ghConfig.branch,listFloorSubmissions,approvers,loadApprovers,verifyApproverPin,askPin]);
+  },[ghAPI,ghConfig.branch,listFloorSubmissions,approvers,loadApprovers,sha256,askPin]);
 
   // Xem chi tiết 1 file Sàn
   const viewFloorSubmission=useCallback(async(file,folder)=>{
@@ -3265,8 +3299,8 @@ URL.revokeObjectURL(url);
                   <button className="btn btn-purple btn-sm" onClick={submitPAToGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Trình duyệt PA — gửi vào luồng duyệt, ký bước 1':'Cần cấu hình GitHub trước (nút ⚙️ GitHub ở header)'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
                     {ghStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'📤'} Trình duyệt
                   </button>
-                  <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Tải / duyệt danh sách PA trên GitHub':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
-                    📂 Tải PA cloud
+                  <button className="btn btn-teal btn-sm" onClick={listPAsFromGithub} disabled={ghStatus.loading||!ghConfig.token} title={ghConfig.token?'Xem luồng duyệt Mua (chờ duyệt + đã duyệt), duyệt bằng PIN':'Cần cấu hình GitHub trước'} style={{padding:'4px 9px',fontSize:'.72rem'}}>
+                    🔄 Luồng duyệt mua
                   </button>
                   <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
                   <button className="btn btn-solid btn-sm" onClick={()=>window.print()} title="In Phương án mua hàng ra giấy A4" style={{padding:'4px 9px',fontSize:'.72rem'}}><Ic.Print/> In A4</button>
@@ -5495,7 +5529,7 @@ URL.revokeObjectURL(url);
                             if(prog.rejected) return <span style={{fontSize:'.6rem',color:'#991b1b',fontWeight:800}}>Đã từ chối</span>;
                             if(prog.done) return <span style={{fontSize:'.6rem',color:'#14532d',fontWeight:800}}>✓ Duyệt đủ cấp</span>;
                             const nx=prog.nextApprover;
-                            return <button className="btn btn-success btn-xs" onClick={()=>setApproveModal({open:true,file:f,approver:nx})} disabled={ghStatus.loading} style={{fontSize:'.62rem'}} title={`Cho ý kiến với tư cách ${nx.name} (${nx.role})`}>✍ {nx.name.replace(/^(Ms|Mr|Mrs)\.?\s*/i,'')} cho ý kiến</button>;
+                            return <button className="btn btn-success btn-xs" onClick={()=>setApproveModal({open:true,file:f,approver:nx})} disabled={ghStatus.loading} style={{fontSize:'.62rem'}} title={`Duyệt / cho ý kiến — nhập PIN để xác nhận. Đang chờ: ${nx.name} (${nx.role})`}>✍ Duyệt / Cho ý kiến</button>;
                           })()}
                         </div>
                       </div>
@@ -5583,7 +5617,7 @@ URL.revokeObjectURL(url);
           loading={ghStatus.loading}
           onClose={()=>setApproveModal({open:false,file:null,approver:null})}
           onSubmit={async(decision,opinion,pin)=>{
-            const ok=await submitApproval(approveModal.file,approveModal.approver.id,decision,opinion,pin);
+            const ok=await submitApproval(approveModal.file,decision,opinion,pin);
             if(ok) setApproveModal({open:false,file:null,approver:null});
           }}
         />
@@ -5625,7 +5659,30 @@ URL.revokeObjectURL(url);
                           </div>
                           {d.requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {d.requestNote}</div>}
                           {d.approvedBy&&<div style={{fontSize:'.62rem',color:'#14532d',marginTop:2,fontWeight:600}}>✓ Duyệt: <strong>{d.approvedBy}</strong></div>}
-                          {Array.isArray(d.approvals)&&d.approvals.length>0&&<div style={{fontSize:'.6rem',color:'#475569',marginTop:2,fontWeight:600}}>🖊 Đã ký: {d.approvals.map(a=>`${a.name}${a.decision==='rejected'?'(bác)':''}`).join(' → ')}</div>}
+                          {/* SỬA #1 (R3): Thanh tiến trình duyệt Sàn + người duyệt tiếp theo */}
+                          {approvers.length>0&&(()=>{
+                            const acts=d.approvals||[];
+                            const prog=approvalProgress(approvers,acts,'floor');
+                            if(prog.empty) return <div style={{fontSize:'.6rem',color:'#b45309',fontWeight:700,marginTop:4}}>⚠ Chưa đặt bước duyệt luồng SÀN</div>;
+                            return(
+                              <div style={{marginTop:5}}>
+                                <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+                                  {prog.chain.map(ap=>{
+                                    const act=acts.find(a=>a.id===ap.id);
+                                    const passed=prog.topSigned>0&&stepOf(ap,'floor')<prog.topSigned&&!act; // bị bỏ qua
+                                    const isNext=prog.nextApprover&&prog.nextApprover.id===ap.id&&!prog.rejected&&!prog.done;
+                                    const bg=act?(act.decision==='approved'?'#dcfce7':'#fee2e2'):isNext?'#fef9c3':passed?'#f8fafc':'#f1f5f9';
+                                    const bc=act?(act.decision==='approved'?'#16a34a':'#dc2626'):isNext?'#f59e0b':'#cbd5e1';
+                                    const ic=act?(act.decision==='approved'?'✓':'✗'):isNext?'⏳':passed?'⤼':'•';
+                                    return <span key={ap.id} title={act?`${ap.name}: ${act.decision==='approved'?'Đồng ý':'Bác'}${act.opinion?' — '+act.opinion:''}`:isNext?`Đang chờ ${ap.name}`:passed?`${ap.name}: đã bỏ qua (bước thấp hơn)`:ap.name} style={{fontSize:'.58rem',fontWeight:800,padding:'1px 6px',borderRadius:10,background:bg,border:`1px solid ${bc}`,color:act?(act.decision==='approved'?'#14532d':'#991b1b'):isNext?'#92400e':'#94a3b8',textDecoration:passed?'line-through':'none'}}>{ic} {ap.name.replace(/^(Ms|Mr|Mrs)\.?\s*/i,'')}<span style={{opacity:.6}}> ·B{stepOf(ap,'floor')}</span></span>;
+                                  })}
+                                </div>
+                                <div style={{fontSize:'.6rem',marginTop:3,fontWeight:700,color:prog.done?'#14532d':prog.rejected?'#991b1b':'#92400e'}}>
+                                  {prog.done?'✓ Đã duyệt đủ cấp (bước cao nhất đã ký)':prog.rejected?'✗ Đã bị bác':prog.nextApprover?`⏳ Chờ duyệt: ${prog.nextApprover.name} (${prog.nextApprover.role} · bước ${stepOf(prog.nextApprover,'floor')})`:'⏳ Chờ duyệt'}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                         <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
                           {/* SỬA #2: Xem chi tiết + Tải nội dung Sàn (giống PAKD Mua) */}
@@ -5734,9 +5791,9 @@ URL.revokeObjectURL(url);
                                 <th style={{textAlign:'right'}}>Dày</th>
                                 <th style={{textAlign:'right'}}>Tồn (kg)</th>
                                 <th style={{textAlign:'right',background:'#fef9c3',color:'#713f12'}}>Sàn BH</th>
-                                <th style={{textAlign:'right',background:'#eff6ff',color:'#1d4ed8'}}>Cốt lõi</th>
-                                <th style={{textAlign:'right',background:'#faf5ff',color:'#7c3aed'}}>Thân thiết</th>
-                                <th style={{textAlign:'right',background:'#fff7ed',color:'#ea580c'}}>KH lẻ</th>
+                                <th style={{textAlign:'right',background:'#eff6ff',color:'#1d4ed8'}}>A Group</th>
+                                <th style={{textAlign:'right',background:'#faf5ff',color:'#7c3aed'}}>B Group</th>
+                                <th style={{textAlign:'right',background:'#fff7ed',color:'#ea580c'}}>C Group</th>
                               </tr>
                             </thead>
                             <tbody>
