@@ -1605,6 +1605,25 @@ const App=()=>{
     alert('✓ Đã tải nháp Sàn "'+d.label+'" — vào Chế độ Quản lý.');
   },[]);
 
+  // SỬA #4 (R2): Tải 1 PA Sàn từ luồng duyệt VÀO THẲNG dữ liệu giá sàn hiện tại (tỷ giá, cờ trừ PO, Sàn ban hành).
+  const loadFloorSubmissionToApp=useCallback((d,fileName)=>{
+    if(!d){alert('⚠ Không có dữ liệu để tải.');return;}
+    // 1. Tỷ giá
+    if(d.exchangeRate!=null) setInputs(p=>({...p,exchangeRate:d.exchangeRate}));
+    // 2. Cờ trừ TL có PO
+    setExcludePOFloor(!!d.excludePOFloor);
+    // 3. Sàn ban hành (mgmtFloorOverride). Ưu tiên field đã lưu; nếu thiếu (file cũ) → dựng từ groups.
+    let ov=d.mgmtFloorOverride;
+    if(!ov||typeof ov!=='object'){
+      ov={};
+      (d.groups||[]).forEach(g=>{ if(g.id!=null&&g.publishedFloor) ov[g.id]=g.publishedFloor; });
+    }
+    setMgmtFloorOverride(ov||{});
+    setFloorStatus(p=>({...p,viewOpen:false}));
+    setTab('floor');setFpView('mgmt');
+    alert(`✓ Đã tải Sàn ${d.weekLabel||fileName||''} vào màn hình.\n• Tỷ giá: ${d.exchangeRate?Number(d.exchangeRate).toLocaleString('vi-VN'):'—'}\n• Trừ TL có PO: ${d.excludePOFloor?'CÓ':'KHÔNG'}\n• Đã nạp ${Object.keys(ov||{}).length} nhóm Sàn ban hành.`);
+  },[]);
+
   // TRÌNH DUYỆT: đẩy PA lên GitHub + ký bước 1 luồng MUA.
   const submitPAToGithub=useCallback(async()=>{
     const apList=approvers.length?approvers:await loadApprovers();
@@ -2014,18 +2033,29 @@ const App=()=>{
     return `${dt.getUTCFullYear()}-W${String(wk).padStart(2,'0')}`;
   };
 
-  // GỬI Giá sàn → /floor/pending/ (Trưởng phòng dùng)
+  // GỬI Giá sàn → /floor/pending/ — SỬA #3 (R2): xác định người gửi BẰNG PIN (tự biết là ai + bước mấy), ký luôn bước đó.
   const submitFloorToGithub=useCallback(async(mgmtDataLocal)=>{
     const publishedGroups=(mgmtDataLocal||[]).filter(g=>g.publishedFloor&&g.skus>0);
     if(publishedGroups.length===0){alert('⚠ Chưa có nhóm nào ban hành Sàn. Hãy nhập Sàn ban hành trước.');return;}
-    // Hỏi tên người gửi
-    const lastSender=localStorage.getItem('pakd_last_sender')||inputs.creator||'';
-    const senderName=prompt(`👤 Bạn là ai? (Tên người ban hành Sàn)\n\nVí dụ: "Hương - Trưởng phòng KD"`,lastSender);
-    if(senderName===null) return;
-    if(!senderName.trim()){alert('⚠ Vui lòng nhập tên');return;}
-    try{localStorage.setItem('pakd_last_sender',senderName.trim());}catch(e){}
-    // Hỏi ghi chú
-    const note=prompt('📝 Ghi chú yêu cầu duyệt Sàn:\n\nVí dụ: "Sàn cho tuần 21, áp dụng từ Thứ 2"');
+    // 0. Nạp người duyệt + kiểm tra có luồng Sàn
+    const apList=approvers.length?approvers:await loadApprovers();
+    const prog0=approvalProgress(apList,[],'floor');
+    if(prog0.empty){
+      alert('⚠ Chưa thiết lập người duyệt cho luồng GIÁ SÀN.\nVào ⚙️ GitHub → "Quản lý người duyệt", đặt "Bước duyệt luồng Giá sàn" (B1, B2…) cho ít nhất 1 người.');
+      return;
+    }
+    // 1. Nhập PIN để tự nhận diện người gửi (KHÔNG hỏi tên nữa)
+    const pin=await askPin('🔐 Nhập PIN của bạn để gửi duyệt Sàn (hệ thống tự nhận diện bạn là ai):');
+    if(pin===null) return;
+    const hash=await sha256(pin);
+    const me=apList.find(a=>a.pinHash===hash);
+    if(!me){alert('❌ PIN không khớp người duyệt nào. Không gửi được.');return;}
+    if(stepOf(me,'floor')<=0){
+      alert(`⚠ Bạn (${me.name}) không nằm trong luồng duyệt Giá sàn (chưa đặt Bước duyệt luồng Giá sàn). Không thể gửi.`);
+      return;
+    }
+    // 2. Hỏi ghi chú (gắn với bước của người gửi)
+    const note=prompt(`📝 Ghi chú yêu cầu duyệt Sàn (bạn: ${me.name} — bước ${stepOf(me,'floor')}):\n\nVí dụ: "Sàn cho tuần 21, áp dụng từ Thứ 2"`);
     if(note===null) return;
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
@@ -2035,19 +2065,27 @@ const App=()=>{
       const timestamp=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}h${pad(now.getMinutes())}`;
       const fname=`${weekLabel}_${timestamp}.json`;
       const path=`contents/floor/pending/${fname}`;
+      // Người gửi KÝ LUÔN bước của mình → các bước sau không cần ý kiến lại của người này
+      const approvals=[{step:stepOf(me,'floor'),id:me.id,name:me.name,role:me.role,decision:'approved',opinion:(note||'').trim(),at:now.toISOString(),isSubmitter:true}];
+      const prog1=approvalProgress(apList,approvals,'floor');
       const payload={
         weekLabel,
         savedAt:now.toISOString(),
-        savedBy:senderName.trim(),
-        requestedBy:senderName.trim(),
-        requestNote:note.trim()||null,
-        status:'pending',
-        approvedBy:null,approvedAt:null,
+        savedBy:me.name,
+        requestedBy:me.name,
+        requestedByStep:stepOf(me,'floor'),
+        requestNote:(note||'').trim()||null,
+        status:prog1.done?'approved':'pending',
+        approvedBy:prog1.done?me.name:null,
+        approvedAt:prog1.done?now.toISOString():null,
+        approvals,
         exchangeRate:inputs.exchangeRate,
         storageCostPct:inputs.storageCostPct??2,
         baseFinCostPct:inputs.baseFinCostPct??1.5,
         opsCostPct:inputs.opsCostPct,
         creditMode:inputs.creditMode,
+        excludePOFloor:!!excludePOFloor,
+        mgmtFloorOverride,
         groupsCount:publishedGroups.length,
         groups:publishedGroups.map(g=>({
           id:g.id,label:g.label,alloy:g.alloy,temper:g.temper,
@@ -2058,19 +2096,37 @@ const App=()=>{
           avgCompPrice:g.avgCompPrice,avgCompFloor:g.avgCompFloor,
         })),
       };
+      // Nếu đủ cấp luôn (chỉ 1 bước Sàn) → ghi thẳng vào /floor/approved/ + history
+      const targetPath=prog1.done?`contents/floor/approved/${fname}`:path;
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-      await ghAPI('PUT',path,{
-        message:`📤 Gửi duyệt Sàn ${weekLabel} bởi ${senderName.trim()} (${publishedGroups.length} nhóm)`,
+      await ghAPI('PUT',targetPath,{
+        message:`📤 ${me.name} gửi${prog1.done?'+duyệt đủ cấp':''} Sàn ${weekLabel} (${publishedGroups.length} nhóm)`,
         content:contentB64,
         branch:ghConfig.branch||'main',
       });
+      if(prog1.done){
+        // append history luôn
+        let historyArr=[];let historySha=null;
+        try{
+          const hd=await ghAPI('GET','contents/floor/history.json');
+          historySha=hd.sha;
+          const hc=decodeURIComponent(escape(atob(hd.content.replace(/\n/g,''))));
+          const hobj=JSON.parse(hc);
+          historyArr=Array.isArray(hobj)?hobj:(hobj.entries||[]);
+        }catch(e){}
+        historyArr.unshift({weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,groupsCount:payload.groupsCount,groups:payload.groups,exchangeRate:payload.exchangeRate,approvals,sourceFile:fname});
+        const histB64=btoa(unescape(encodeURIComponent(JSON.stringify(historyArr,null,2))));
+        const histBody={message:`📚 Append history: Sàn ${weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
+        if(historySha) histBody.sha=historySha;
+        await ghAPI('PUT','contents/floor/history.json',histBody);
+      }
       setFloorStatus(p=>({...p,loading:false,lastAction:`✓ Đã gửi Sàn ${weekLabel}`}));
-      alert(`✓ Đã gửi Sàn ${weekLabel} lên GitHub!\nFile: ${fname}\nGiám đốc cần vào duyệt để chính thức ban hành.`);
+      alert(`✓ Đã gửi Sàn ${weekLabel}!\nBạn: ${me.name} (đã ký bước ${stepOf(me,'floor')}).\n${prog1.done?'🎉 Đủ cấp — đã ban hành luôn.':'⏳ Chuyển bước kế tiếp: '+(prog1.nextApprover?prog1.nextApprover.name+' ('+prog1.nextApprover.role+')':'?')+'.'}`);
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi gửi Sàn:\n${e.message}`);
     }
-  },[ghAPI,inputs,ghConfig.branch]);
+  },[ghAPI,inputs,ghConfig.branch,approvers,loadApprovers,askPin,excludePOFloor,mgmtFloorOverride]);
 
   // Tải danh sách Sàn pending + approved (Giám đốc xem)
   const listFloorSubmissions=useCallback(async()=>{
@@ -2377,9 +2433,9 @@ const App=()=>{
             const bqGV=gv2(r,['BQ GV (đ/kg)','bqgv','bq gv']);
             const sanTD=gv2(r,['Sàn tự động (đ/kg)','santudong','san tu dong']);
             const sanBH=gv2(r,['Sàn ban hành (đ/kg)','sanbanhành','san ban hanh']);
-            const cotLoi=gv2(r,['Cốt lõi (đ/kg)','cotloi','cot loi']);
-            const thanThiet=gv2(r,['Thân thiết (đ/kg)','thanthiet','than thiet']);
-            const khLe=gv2(r,['KH lẻ (đ/kg)','khle','kh le']);
+            const cotLoi=gv2(r,['A Group (đ/kg)','agroup','a group','Cốt lõi (đ/kg)','cotloi','cot loi']);
+            const thanThiet=gv2(r,['B Group (đ/kg)','bgroup','b group','Thân thiết (đ/kg)','thanthiet','than thiet']);
+            const khLe=gv2(r,['C Group (đ/kg)','cgroup','c group','KH lẻ (đ/kg)','khle','kh le']);
             const bqDT=gv2(r,['BQ ĐT (đ/kg)','bqdt','bq dt']);
             const sanDT=gv2(r,['Sàn ĐT (đ/kg)','sandt','san dt']);
             if(!ngay&&!nhom) return;
@@ -2878,7 +2934,7 @@ const App=()=>{
       'Ngày ban hành','Giờ','Người lập','Tỷ giá USD','LK%','CPTC%','HĐKD%',
       'Nhóm hàng','Mác','Temper','Dày min','Dày max','SKUs','Tồn kho (kg)',
       'BQ GV (đ/kg)','Sàn tự động (đ/kg)','Sàn ban hành (đ/kg)',
-      'Cốt lõi (đ/kg)','Thân thiết (đ/kg)','KH lẻ (đ/kg)','BQ ĐT (đ/kg)','Sàn ĐT (đ/kg)'
+      'A Group (đ/kg)','B Group (đ/kg)','C Group (đ/kg)','BQ ĐT (đ/kg)','Sàn ĐT (đ/kg)'
     ];
     const dataRows=[];
     floorHistory.forEach(e=>{
@@ -2901,9 +2957,9 @@ const App=()=>{
           n(g.avgCost),              // BQ GV (đ/kg)
           n(g.autoFloor),            // Sàn tự động (đ/kg)
           n(g.publishedFloor),       // Sàn ban hành (đ/kg)
-          n(g.corePrice),            // Cốt lõi (đ/kg)
-          n(g.loyalPrice),           // Thân thiết (đ/kg)
-          n(g.newPrice),             // KH lẻ (đ/kg)
+          n(g.corePrice),            // A Group (đ/kg)
+          n(g.loyalPrice),           // B Group (đ/kg)
+          n(g.newPrice),             // C Group (đ/kg)
           g.avgCompPrice>0?n(g.avgCompPrice):'', // BQ ĐT (đ/kg)
           g.avgCompFloor>0?n(g.avgCompFloor):'', // Sàn ĐT (đ/kg)
         ]);
@@ -3947,25 +4003,27 @@ URL.revokeObjectURL(url);
                     </div>
                     </div>
                     <div style={{display:'flex',gap:6,flexShrink:0,alignItems:'center'}}>
-                      <button className="btn btn-ghost btn-xs" style={{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c'}} onClick={()=>setExcludedMgmtSkus({})} title="Reset: tính lại tất cả SKUs vào giá sàn chung">🔄 Reset bỏ SKU</button>
+                      {/* SỬA #6 (R2): Ô nhập Tỷ giá ngay trong tab Giá sàn — dùng chung inputs.exchangeRate với PAKD Mua (tự đồng bộ) */}
+                      <div style={{display:'flex',alignItems:'center',gap:4,background:'#ecfeff',border:'1px solid #a5f3fc',borderRadius:5,padding:'3px 7px'}}>
+                        <span style={{fontSize:'.67rem',color:'#155e75',fontWeight:800,whiteSpace:'nowrap'}}>💱 Tỷ giá:</span>
+                        <input className="inp inp-xs mono" type="text" inputMode="numeric" style={{width:78,color:'#0e7490',fontWeight:800,border:'1px solid #a5f3fc',background:'#fff',textAlign:'right'}} placeholder="VD 26000" value={inputs.exchangeRate?Number(inputs.exchangeRate).toLocaleString('vi-VN'):''} onChange={e=>{const v=parseFloat(e.target.value.replace(/[^\d]/g,''))||0;setInputs(p=>({...p,exchangeRate:v}));}} title="Tỷ giá USD/VND — đồng bộ với tab PAKD Mua"/>
+                      </div>
                       <button className={`btn btn-xs ${excludePOFloor?'btn-purple':'btn-ghost'}`} onClick={()=>setExcludePOFloor(v=>!v)} disabled={poData.length===0} title={poData.length===0?'Cần Sync PO trước (tab 📑 PO đã ký)':'Trừ trọng lượng PO chưa giao khỏi khối lượng tính giá sàn'} style={{border:excludePOFloor?undefined:'1px solid #c4b5fd',color:excludePOFloor?undefined:'#6d28d9'}}>{excludePOFloor?'✓ Đang trừ PO':'➖ Trừ TL có PO'}</button>
-                      <button className="btn btn-teal btn-sm" onClick={()=>exportFloorCSV(null)}>⬇️ Xuất Excel/CSV</button>
                       <div style={{display:'flex',alignItems:'center',gap:4,background:'#f3e8ff',border:'1px solid #d8b4fe',borderRadius:5,padding:'3px 7px'}}>
                         <span style={{fontSize:'.67rem',color:'#6d28d9',fontWeight:800,whiteSpace:'nowrap'}}>👤 Người lập PDF:</span>
                         <input className="inp inp-xs mono" style={{width:130,color:'#581c87',fontWeight:700,border:'1px solid #d8b4fe',background:'#faf5ff'}} placeholder={inputs.creator||'Nhập tên…'} value={pdfSignerName} onChange={e=>setPdfSignerName(e.target.value)}/>
                         <button className="btn btn-purple btn-xs" onClick={()=>exportFloorPDF(null,pdfSignerName||inputs.creator)}>📄 PDF</button>
                       </div>
-                      <button className="btn btn-success btn-sm" onClick={saveFloorHistory} title="Lưu lịch sử local + GSheet (workflow cũ)"><Ic.Save/> Lưu local</button>
-                      {/* SỬA #4: Nháp local Giá sàn (tải lại y nguyên) */}
+                      {/* SỬA #1 (R2): chỉ còn Nháp local trình duyệt — bỏ nút "Lưu local" cũ (lưu lịch sử GSheet) */}
                       <button className="btn btn-sm" onClick={saveFloorLocal} title="Lưu nháp Giá sàn vào máy này (tải lại y nguyên trạng thái)" style={{fontSize:'.72rem',background:'#f59e0b',color:'#fff',border:'1px solid #d97706'}}>💾 Lưu nháp Sàn</button>
-                      <button className="btn btn-ghost btn-sm" onClick={()=>setFloorDraftModalOpen(true)} title="Mở danh sách nháp Giá sàn đã lưu trên máy" style={{fontSize:'.72rem'}}>🗂 Nháp Sàn ({floorDrafts.length})</button>
-                      {/* ─── Cloud Sàn ─── */}
+                      <button className="btn btn-ghost btn-sm" onClick={()=>setFloorDraftModalOpen(true)} title="Mở danh sách nháp Giá sàn đã lưu trên máy" style={{fontSize:'.72rem'}}>🗂 Sàn nháp ({floorDrafts.length})</button>
+                      {/* ─── Luồng duyệt Sàn (Cloud) ─── */}
                       <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
-                      <button className="btn btn-purple btn-sm" onClick={()=>submitFloorToGithub(mgmtData)} disabled={floorStatus.loading||!ghConfig.token} title={ghConfig.token?'Gửi Sàn tuần này lên GitHub để Giám đốc duyệt':'Cần cấu hình GitHub trước (⚙️ GitHub ở header)'} style={{fontSize:'.72rem'}}>
-                        {floorStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'📤'} Gửi GĐ duyệt
+                      <button className="btn btn-purple btn-sm" onClick={()=>submitFloorToGithub(mgmtData)} disabled={floorStatus.loading||!ghConfig.token} title={ghConfig.token?'Gửi Sàn tuần này lên GitHub để duyệt theo luồng':'Cần cấu hình GitHub trước (⚙️ GitHub ở header)'} style={{fontSize:'.72rem'}}>
+                        {floorStatus.loading?<div className="spinner" style={{width:11,height:11}}/>:'📤'} Gửi duyệt
                       </button>
-                      <button className="btn btn-teal btn-sm" onClick={listFloorSubmissions} disabled={floorStatus.loading||!ghConfig.token} title="Xem danh sách Sàn đã gửi (chờ duyệt + đã duyệt)" style={{fontSize:'.72rem'}}>
-                        📂 Sàn cloud
+                      <button className="btn btn-teal btn-sm" onClick={listFloorSubmissions} disabled={floorStatus.loading||!ghConfig.token} title="Xem luồng duyệt Sàn (chờ duyệt + đã duyệt) và tải về app" style={{fontSize:'.72rem'}}>
+                        🔄 Luồng duyệt Sàn
                       </button>
                     </div>
                   </div>
@@ -4873,9 +4931,9 @@ URL.revokeObjectURL(url);
                                 <th style={{background:'#fef3c7',color:'#92400e',minWidth:90}}>🏭 BQ Đối thủ</th>
                                 <th style={{background:'#fde68a',color:'#92400e',minWidth:90}}>🔻 BQ Sàn ĐT</th>
                                 <th style={{background:'#fefce8',color:'#713f12',fontWeight:900,minWidth:110}}>✏️ Sàn ban hành</th>
-                                <th style={{background:'#eff6ff',color:'#1e3a8a',minWidth:100}}>👥 BQ Cốt lõi<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
-                                <th style={{background:'#ede9fe',color:'#5b21b6',minWidth:100}}>💛 BQ Thân thiết<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
-                                <th style={{background:'#fff7ed',color:'#9a3412',minWidth:100}}>🆕 BQ KH lẻ<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
+                                <th style={{background:'#eff6ff',color:'#1e3a8a',minWidth:100}}>👥 BQ A Group<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
+                                <th style={{background:'#ede9fe',color:'#5b21b6',minWidth:100}}>💛 BQ B Group<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
+                                <th style={{background:'#fff7ed',color:'#9a3412',minWidth:100}}>🆕 BQ C Group<div style={{fontSize:'.5rem',fontWeight:600,opacity:.8}}>% vs GV</div></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -4931,7 +4989,7 @@ URL.revokeObjectURL(url);
               <div style={{marginTop:16,background:'#f0fdf4',border:'1px solid #86efac',borderRadius:7,padding:'9px 14px',fontSize:'.7rem',color:'#14532d',lineHeight:1.8,fontWeight:600}}>
                 📊 <strong>Cấu trúc header GSheet tab "Lịch sử Sàn" (22 cột — đặt ở hàng 1):</strong><br/>
                 <span style={{fontFamily:'JetBrains Mono',fontSize:'.65rem',background:'#dcfce7',padding:'2px 6px',borderRadius:3,display:'inline-block',marginTop:4,lineHeight:2}}>
-                  Ngày ban hành | Giờ | Người lập | Tỷ giá USD | LK% | CPTC% | HĐKD% | Nhóm hàng | Mác | Temper | Dày min | Dày max | SKUs | Tồn kho (kg) | BQ GV (đ/kg) | Sàn tự động (đ/kg) | Sàn ban hành (đ/kg) | Cốt lõi (đ/kg) | Thân thiết (đ/kg) | KH lẻ (đ/kg) | BQ ĐT (đ/kg) | Sàn ĐT (đ/kg)
+                  Ngày ban hành | Giờ | Người lập | Tỷ giá USD | LK% | CPTC% | HĐKD% | Nhóm hàng | Mác | Temper | Dày min | Dày max | SKUs | Tồn kho (kg) | BQ GV (đ/kg) | Sàn tự động (đ/kg) | Sàn ban hành (đ/kg) | A Group (đ/kg) | B Group (đ/kg) | C Group (đ/kg) | BQ ĐT (đ/kg) | Sàn ĐT (đ/kg)
                 </span>
               </div>
             </div>
@@ -5536,7 +5594,7 @@ URL.revokeObjectURL(url);
         <div onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
           <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
-              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📂 Quản lý Sàn Cloud — Phê duyệt theo tuần</h3>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🔄 Luồng duyệt Sàn — Phê duyệt theo tuần</h3>
               <button onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
             <div style={{display:'flex',gap:4,marginBottom:12,padding:4,background:'#f1f5f9',borderRadius:6}}>
@@ -5574,7 +5632,7 @@ URL.revokeObjectURL(url);
                           {(()=>{const key=(f._folder||floorStatus.activeTab)+'/'+f.name;const open=floorStatus.expandFloorKey===key;return(
                           <button onClick={()=>setFloorStatus(p=>({...p,expandFloorKey:open?null:key}))} style={{fontSize:'.65rem',background:open?'#e0e7ff':'#eef2ff',color:'#3730a3',border:'1px solid #c7d2fe',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>{open?'▲ Ẩn':'👁 Xem'}</button>
                           );})()}
-                          <button onClick={()=>{try{const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}catch(e){alert('❌ Lỗi tải: '+e.message);}}} style={{fontSize:'.65rem',background:'#ecfeff',color:'#155e75',border:'1px solid #a5f3fc',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>⬇ Tải</button>
+                          <button onClick={()=>loadFloorSubmissionToApp(d,f.name)} title="Tải Sàn này vào màn hình (tỷ giá, Sàn ban hành, cờ trừ PO)" style={{fontSize:'.65rem',background:'#dcfce7',color:'#14532d',border:'1px solid #86efac',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>⬇ Tải về app</button>
                           {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
                           {isPending&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
                         </div>
@@ -5592,9 +5650,9 @@ URL.revokeObjectURL(url);
                                 <th style={{textAlign:'right'}}>TL (kg)</th>
                                 <th style={{textAlign:'right'}}>Sàn tự động</th>
                                 <th style={{textAlign:'right'}}>Sàn ban hành</th>
-                                <th style={{textAlign:'right'}}>Cốt lõi</th>
-                                <th style={{textAlign:'right'}}>Trung thành</th>
-                                <th style={{textAlign:'right'}}>Mới</th>
+                                <th style={{textAlign:'right'}}>A Group</th>
+                                <th style={{textAlign:'right'}}>B Group</th>
+                                <th style={{textAlign:'right'}}>C Group</th>
                               </tr></thead>
                               <tbody>
                                 {(d.groups||[]).map((g,gi)=>(
@@ -5714,7 +5772,7 @@ URL.revokeObjectURL(url);
   );
 };
 
-/* PAKD 7.1 — PO module */
+/* PAKD 7.1 — PO module · R2 floor-flow fixes applied */
 ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App/></ErrorBoundary>);
 </script>
 </body>
