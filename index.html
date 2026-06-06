@@ -1456,9 +1456,12 @@ const App=()=>{
   const [msFilter,setMsFilter]=useState({alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:'',onlyBuyReq:false});
   const [spFilter,setSpFilter]=useState({alloy:'ALL',coating:'ALL',search:''});
   const [fpFilter,setFpFilter]=useState({alloy:'ALL',coating:'ALL',search:'',thickMin:'',thickMax:''});
-  const [fpView,setFpView]=useState('detail');
+  const [fpView,setFpView]=useState('mgmt'); // SỬA #3: mặc định vào Chế độ Quản lý khi mở tab Giá sàn
   const [mgmtGroups,setMgmtGroups]=useState(DEFAULT_MGMT_GROUPS);
   const [mgmtFloorOverride,setMgmtFloorOverride]=useState({});
+  // SỬA #4: Nháp local cho tab Giá sàn (localStorage, tải lại y nguyên) — giống PAKD Mua
+  const [floorDrafts,setFloorDrafts]=useState(()=>{try{return JSON.parse(localStorage.getItem('pakd_floor_drafts')||'[]');}catch(e){return [];}});
+  const [floorDraftModalOpen,setFloorDraftModalOpen]=useState(false);
   const [expandedMgmtGroups,setExpandedMgmtGroups]=useState({});
   const [excludedMgmtSkus,setExcludedMgmtSkus]=useState({});
   const [pdfSignerName,setPdfSignerName]=useState('');
@@ -1544,6 +1547,7 @@ const App=()=>{
   },[ghConfig]);
   // Ref để truy cập `result` (vốn được khai báo sau) mà không vi phạm TDZ
   const resultRef=useRef(null);
+  const mgmtDataRef=useRef(null); // SỬA #4: tránh TDZ khi saveFloorLocal đọc mgmtData (khai báo sau)
   // LƯU LOCAL: lưu PA nháp vào localStorage (KHÔNG đẩy GitHub). Thay tab Scenarios cũ.
   const savePALocal=useCallback(async()=>{
     const r=resultRef.current;
@@ -1564,6 +1568,42 @@ const App=()=>{
       alert('✓ Đã lưu nháp trên máy này (localStorage). Mở bằng nút "💾 Nháp Local".');
     }catch(e){ alert('❌ Lỗi lưu nháp: '+e.message); }
   },[inputs,products]);
+
+  // SỬA #4: Lưu nháp Giá sàn vào localStorage (KHÔNG đẩy GitHub). Tải lại y nguyên trạng thái tab Sàn.
+  const saveFloorLocal=useCallback(()=>{
+    const nameDefault=`Sàn ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'})}`;
+    const label=window.prompt('💾 Đặt tên bản nháp Giá sàn (lưu trên máy này):',nameDefault);
+    if(label===null) return;
+    try{
+      const md=mgmtDataRef.current||[];
+      const publishedCount=md.filter(g=>g.publishedFloor&&g.skus>0).length;
+      const drafts=JSON.parse(localStorage.getItem('pakd_floor_drafts')||'[]');
+      drafts.unshift({
+        id:'f'+Date.now(),
+        label:label.trim()||nameDefault,
+        savedAt:new Date().toISOString(),
+        // Toàn bộ state cần để dựng lại tab Sàn y nguyên:
+        inputs,products,
+        mgmtFloorOverride,excludedMgmtSkus,excludePOFloor,
+        snapshot:{groupsCount:md.length,publishedCount,exchangeRate:inputs.exchangeRate},
+      });
+      localStorage.setItem('pakd_floor_drafts',JSON.stringify(drafts.slice(0,100)));
+      setFloorDrafts(drafts.slice(0,100));
+      alert('✓ Đã lưu nháp Giá sàn trên máy này. Mở lại bằng nút "🗂 Nháp Sàn".');
+    }catch(e){ alert('❌ Lỗi lưu nháp Sàn: '+e.message); }
+  },[inputs,products,mgmtFloorOverride,excludedMgmtSkus,excludePOFloor]);
+
+  // SỬA #4: Tải lại 1 nháp Giá sàn về app
+  const loadFloorLocal=useCallback((d)=>{
+    if(d.inputs) setInputs(d.inputs);
+    if(d.products) setProducts(d.products);
+    setMgmtFloorOverride(d.mgmtFloorOverride||{});
+    setExcludedMgmtSkus(d.excludedMgmtSkus||{});
+    setExcludePOFloor(!!d.excludePOFloor);
+    setFloorDraftModalOpen(false);
+    setTab('floor');setFpView('mgmt');
+    alert('✓ Đã tải nháp Sàn "'+d.label+'" — vào Chế độ Quản lý.');
+  },[]);
 
   // TRÌNH DUYỆT: đẩy PA lên GitHub + ký bước 1 luồng MUA.
   const submitPAToGithub=useCallback(async()=>{
@@ -1761,6 +1801,8 @@ const App=()=>{
     history:[],                // Nội dung file /floor/history.json
     historyOpen:false,         // Modal xem history
     activeTab:'pending',       // pending | approved
+    expandFloorKey:null,       // SỬA #2: key (folder+name) của file đang mở chi tiết trong modal duyệt
+    expandedIdx:null,          // dùng cho modal Lịch sử
   });
 
   // ═══════════════════════════════════════════════════════
@@ -2064,43 +2106,77 @@ const App=()=>{
   },[ghAPI]);
 
   // Duyệt 1 file Sàn pending → chuyển sang approved + append vào history.json
+  // SỬA #1: Duyệt Sàn dùng hệ PIN nhiều người (approvers.json) — ký TUẦN TỰ theo Bước duyệt luồng Sàn (stepFloor), giống luồng Mua.
   const reviewFloorSubmission=useCallback(async(file,folder,newStatus)=>{
     const verbTxt=newStatus==='approved'?'duyệt':'từ chối';
-    const serverHash=pinStatus.hashOnServer||await loadPinHash();
-    if(!serverHash){
-      alert('⚠ Chưa có PIN duyệt được thiết lập. Vào ⚙️ GitHub → Kiểm tra/Thiết lập PIN.');
+    // 0. Nạp danh sách người duyệt + xác định bước Sàn
+    const apList=approvers.length?approvers:await loadApprovers();
+    // 1. Lấy file hiện tại để biết đã ai ký
+    setFloorStatus(p=>({...p,loading:true,error:null}));
+    let data,payload;
+    try{
+      data=await ghAPI('GET',`contents/floor/${folder}/${file.name}`);
+      const content=decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
+      payload=JSON.parse(content);
+    }catch(e){
+      setFloorStatus(p=>({...p,loading:false,error:e.message}));
+      alert(`❌ Không đọc được file Sàn:\n${e.message}`);return;
+    }
+    const approvalsArr=Array.isArray(payload.approvals)?payload.approvals:[];
+    const prog=approvalProgress(apList,approvalsArr,'floor');
+    if(prog.empty){
+      setFloorStatus(p=>({...p,loading:false}));
+      alert('⚠ Chưa thiết lập người duyệt cho luồng GIÁ SÀN.\nVào ⚙️ GitHub → "Quản lý người duyệt", đặt "Bước duyệt luồng Giá sàn" (B1, B2…) cho ít nhất 1 người.');
       return;
     }
-    const pin=await askPin(`🔐 NHẬP PIN ĐỂ ${verbTxt.toUpperCase()} SÀN — File: ${file.name}`);
-    if(!pin) return;
-    const ok=await verifyPin(pin);
-    if(!ok){alert('❌ PIN SAI. Không có quyền duyệt.');return;}
-    const reviewerName='Giám đốc (PIN xác thực ✓)';
-    setFloorStatus(p=>({...p,loading:true,error:null}));
+    if(prog.rejected){
+      setFloorStatus(p=>({...p,loading:false}));
+      alert('⚠ Sàn này đã bị từ chối ở bước trước.');return;
+    }
+    // 2. Người tới lượt ký
+    const signer=prog.nextApprover;
+    if(!signer){
+      setFloorStatus(p=>({...p,loading:false}));
+      alert('✓ Sàn này đã được duyệt đủ các cấp rồi.');return;
+    }
+    // 3. Nhập ý kiến (chỉ khi duyệt) + PIN riêng của người tới lượt
+    let opinion='';
+    if(newStatus==='approved'){
+      const op=window.prompt(`📝 Ý kiến của ${signer.name} (${signer.role}) khi duyệt Sàn:\n\nVí dụ: "Đồng ý giá sàn tuần này."`);
+      if(op===null){setFloorStatus(p=>({...p,loading:false}));return;}
+      opinion=op;
+    }else{
+      const op=window.prompt(`📝 Lý do ${signer.name} (${signer.role}) BÁC Sàn này:`);
+      if(op===null){setFloorStatus(p=>({...p,loading:false}));return;}
+      opinion=op;
+    }
+    const pin=await askPin(`🔐 Nhập PIN riêng của ${signer.name} để ${verbTxt.toUpperCase()} Sàn (bước ${stepOf(signer,'floor')}):`);
+    if(pin===null){setFloorStatus(p=>({...p,loading:false}));return;}
+    const ok=await verifyApproverPin(signer.id,pin);
+    if(!ok){setFloorStatus(p=>({...p,loading:false}));alert(`❌ PIN SAI — không đúng PIN của ${signer.name}. Chưa tới lượt người khác ký.`);return;}
     try{
-      // 1. Lấy file pending hiện tại
-      const data=await ghAPI('GET',`contents/floor/${folder}/${file.name}`);
-      const content=decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
-      const payload=JSON.parse(content);
-      payload.status=newStatus;
-      payload.approvedBy=reviewerName;
-      payload.approvedAt=new Date().toISOString();
+      // 4. Ghi 1 lượt ký vào approvals[]
+      approvalsArr.push({step:stepOf(signer,'floor'),id:signer.id,name:signer.name,role:signer.role,decision:newStatus,opinion:(opinion||'').trim(),at:new Date().toISOString()});
+      payload.approvals=approvalsArr;
+      const prog2=approvalProgress(apList,approvalsArr,'floor');
+      payload.status=prog2.rejected?'rejected':prog2.done?'approved':'pending';
+      payload.approvedBy=prog2.done?(prog2.chain||[]).map(a=>a.name).join(' → '):null;
+      payload.approvedAt=prog2.done?new Date().toISOString():null;
 
-      if(newStatus==='approved'){
-        // 2. Tạo file mới trong /floor/approved/
+      if(prog2.done){
+        // ĐỦ CẤP → chuyển sang /floor/approved/ + append history
         const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
         await ghAPI('PUT',`contents/floor/approved/${file.name}`,{
-          message:`✓ Duyệt Sàn ${file.name} bởi ${reviewerName}`,
-          content:newContentB64,
-          branch:ghConfig.branch||'main',
+          message:`✓ Duyệt đủ cấp Sàn ${file.name} (${payload.approvedBy})`,
+          content:newContentB64,branch:ghConfig.branch||'main',
         });
-        // 3. Xóa file pending cũ
-        await ghAPI('DELETE',`contents/floor/pending/${file.name}`,{
-          message:`Xóa pending sau khi duyệt: ${file.name}`,
-          sha:data.sha,
-          branch:ghConfig.branch||'main',
-        });
-        // 4. Append vào /floor/history.json
+        if(folder==='pending'){
+          await ghAPI('DELETE',`contents/floor/pending/${file.name}`,{
+            message:`Xóa pending sau khi duyệt đủ cấp: ${file.name}`,
+            sha:data.sha,branch:ghConfig.branch||'main',
+          });
+        }
+        // Append vào /floor/history.json
         let historyArr=[];let historySha=null;
         try{
           const hd=await ghAPI('GET','contents/floor/history.json');
@@ -2118,35 +2194,34 @@ const App=()=>{
           groupsCount:payload.groupsCount,
           groups:payload.groups,
           exchangeRate:payload.exchangeRate,
+          approvals:approvalsArr,
           sourceFile:file.name,
         });
         const histB64=btoa(unescape(encodeURIComponent(JSON.stringify(historyArr,null,2))));
-        const histBody={
-          message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,
-          content:histB64,
-          branch:ghConfig.branch||'main',
-        };
+        const histBody={message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
         if(historySha) histBody.sha=historySha;
         await ghAPI('PUT','contents/floor/history.json',histBody);
-        alert(`✓ Đã duyệt Sàn ${payload.weekLabel}\n→ Chuyển sang /floor/approved/\n→ Đã append vào history.json (tổng cộng ${historyArr.length} bản)`);
+        alert(`✓ ${signer.name} đã ký bước cuối.\n🎉 Sàn ${payload.weekLabel} ĐÃ DUYỆT ĐỦ CẤP.\n→ Chuyển /floor/approved/ + append history (${historyArr.length} bản).`);
       }else{
-        // Từ chối: ghi trạng thái rejected nhưng vẫn ở pending để Trưởng phòng biết
+        // Chưa đủ cấp (hoặc bị bác) → ghi lại tại chỗ
         const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
         await ghAPI('PUT',`contents/floor/${folder}/${file.name}`,{
-          message:`✗ Từ chối Sàn ${file.name} bởi ${reviewerName}`,
-          content:newContentB64,
-          sha:data.sha,
-          branch:ghConfig.branch||'main',
+          message:`${newStatus==='approved'?'✓ '+signer.role+' duyệt bước '+stepOf(signer,'floor'):'✗ '+signer.role+' bác'} Sàn ${file.name} (${signer.name})`,
+          content:newContentB64,sha:data.sha,branch:ghConfig.branch||'main',
         });
-        alert(`✗ Đã từ chối Sàn ${file.name}`);
+        if(prog2.rejected){
+          alert(`✗ ${signer.name} đã BÁC Sàn ${payload.weekLabel}.`);
+        }else{
+          alert(`✓ ${signer.name} (${signer.role}) đã ký duyệt bước ${stepOf(signer,'floor')}.\n⏳ Chuyển bước kế tiếp: ${prog2.nextApprover?prog2.nextApprover.name+' ('+prog2.nextApprover.role+')':'?'}.`);
+        }
       }
-      // Refresh
+      // Refresh danh sách (giữ file đang xem nếu còn ở pending)
       await listFloorSubmissions();
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi ${verbTxt}:\n${e.message}`);
     }
-  },[ghAPI,ghConfig.branch,listFloorSubmissions]);
+  },[ghAPI,ghConfig.branch,listFloorSubmissions,approvers,loadApprovers,verifyApproverPin,askPin]);
 
   // Xem chi tiết 1 file Sàn
   const viewFloorSubmission=useCallback(async(file,folder)=>{
@@ -2404,6 +2479,7 @@ const App=()=>{
 
   // Sync resultRef cho callbacks GitHub không vi phạm TDZ
   useEffect(()=>{resultRef.current=result;},[result]);
+  useEffect(()=>{mgmtDataRef.current=mgmtData;},[mgmtData]); // SỬA #4: đồng bộ ref cho saveFloorLocal
 
   const reportData=useMemo(()=>calcAlloySummary(inventory,result?result.finPerKg:0,inputs,result?result.rows:[]),[inventory,result,inputs]);
   const limitsWarnings=useMemo(()=>calcLimitsWarnings(limitsData,inventory),[limitsData,inventory]);
@@ -3880,6 +3956,9 @@ URL.revokeObjectURL(url);
                         <button className="btn btn-purple btn-xs" onClick={()=>exportFloorPDF(null,pdfSignerName||inputs.creator)}>📄 PDF</button>
                       </div>
                       <button className="btn btn-success btn-sm" onClick={saveFloorHistory} title="Lưu lịch sử local + GSheet (workflow cũ)"><Ic.Save/> Lưu local</button>
+                      {/* SỬA #4: Nháp local Giá sàn (tải lại y nguyên) */}
+                      <button className="btn btn-sm" onClick={saveFloorLocal} title="Lưu nháp Giá sàn vào máy này (tải lại y nguyên trạng thái)" style={{fontSize:'.72rem',background:'#f59e0b',color:'#fff',border:'1px solid #d97706'}}>💾 Lưu nháp Sàn</button>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>setFloorDraftModalOpen(true)} title="Mở danh sách nháp Giá sàn đã lưu trên máy" style={{fontSize:'.72rem'}}>🗂 Nháp Sàn ({floorDrafts.length})</button>
                       {/* ─── Cloud Sàn ─── */}
                       <span style={{width:1,height:18,background:'#cbd5e1',margin:'0 4px'}}/>
                       <button className="btn btn-purple btn-sm" onClick={()=>submitFloorToGithub(mgmtData)} disabled={floorStatus.loading||!ghConfig.token} title={ghConfig.token?'Gửi Sàn tuần này lên GitHub để Giám đốc duyệt':'Cần cấu hình GitHub trước (⚙️ GitHub ở header)'} style={{fontSize:'.72rem'}}>
@@ -5409,6 +5488,35 @@ URL.revokeObjectURL(url);
         </div>
       )}
 
+      {/* SỬA #4: MODAL Nháp Giá sàn trên máy */}
+      {floorDraftModalOpen&&(
+        <div onClick={()=>setFloorDraftModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:680,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🗂 Bản nháp Giá sàn trên máy ({floorDrafts.length})</h3>
+              <button onClick={()=>setFloorDraftModalOpen(false)} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+            </div>
+            <div style={{fontSize:'.7rem',color:'#475569',marginBottom:12,background:'#f1f5f9',borderRadius:6,padding:'8px 12px',lineHeight:1.5}}>💡 Nháp Sàn chỉ lưu trên trình duyệt máy này (không lên GitHub). Tải lại sẽ khôi phục y nguyên: tỷ giá, các %, Sàn ban hành đã nhập, SKU loại trừ, cờ trừ PO.</div>
+            {floorDrafts.length===0?(
+              <div style={{textAlign:'center',padding:30,color:'#94a3b8',fontWeight:600}}>Chưa có nháp Sàn nào. Vào tab 💹 Giá Sàn → nhấn "💾 Lưu nháp Sàn".</div>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {floorDrafts.map((d)=>(
+                  <div key={d.id} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:7,padding:'9px 12px'}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,fontSize:'.82rem',color:'#0f172a'}}>{d.label}</div>
+                      <div style={{fontSize:'.66rem',color:'#475569',fontWeight:600,marginTop:2}}>{d.savedAt?new Date(d.savedAt).toLocaleString('vi-VN'):''}{d.snapshot?` · 📊 ${d.snapshot.groupsCount||0} nhóm · ✅ ${d.snapshot.publishedCount||0} ban hành · 💱 ${d.snapshot.exchangeRate?Number(d.snapshot.exchangeRate).toLocaleString('vi-VN'):'?'}`:''}</div>
+                    </div>
+                    <button className="btn btn-purple btn-xs" onClick={()=>loadFloorLocal(d)} style={{fontSize:'.65rem'}}>⬇ Tải</button>
+                    <button className="btn-danger" onClick={()=>{const next=floorDrafts.filter(x=>x.id!==d.id);setFloorDrafts(next);try{localStorage.setItem('pakd_floor_drafts',JSON.stringify(next));}catch(e){}}} title="Xóa nháp này"><Ic.X/></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MODAL: CHO Ý KIẾN / DUYỆT TUẦN TỰ (Việc 1 đợt 2) */}
       {approveModal.open&&approveModal.approver&&(
         <ApprovalModal
@@ -5459,12 +5567,61 @@ URL.revokeObjectURL(url);
                           </div>
                           {d.requestNote&&<div style={{fontSize:'.65rem',color:'#854d0e',background:'#fef9c3',border:'1px solid #fde047',borderRadius:4,padding:'3px 7px',marginTop:3,fontStyle:'italic'}}>📝 {d.requestNote}</div>}
                           {d.approvedBy&&<div style={{fontSize:'.62rem',color:'#14532d',marginTop:2,fontWeight:600}}>✓ Duyệt: <strong>{d.approvedBy}</strong></div>}
+                          {Array.isArray(d.approvals)&&d.approvals.length>0&&<div style={{fontSize:'.6rem',color:'#475569',marginTop:2,fontWeight:600}}>🖊 Đã ký: {d.approvals.map(a=>`${a.name}${a.decision==='rejected'?'(bác)':''}`).join(' → ')}</div>}
                         </div>
                         <div style={{display:'flex',flexDirection:'column',gap:3,flexShrink:0}}>
+                          {/* SỬA #2: Xem chi tiết + Tải nội dung Sàn (giống PAKD Mua) */}
+                          {(()=>{const key=(f._folder||floorStatus.activeTab)+'/'+f.name;const open=floorStatus.expandFloorKey===key;return(
+                          <button onClick={()=>setFloorStatus(p=>({...p,expandFloorKey:open?null:key}))} style={{fontSize:'.65rem',background:open?'#e0e7ff':'#eef2ff',color:'#3730a3',border:'1px solid #c7d2fe',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>{open?'▲ Ẩn':'👁 Xem'}</button>
+                          );})()}
+                          <button onClick={()=>{try{const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=f.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}catch(e){alert('❌ Lỗi tải: '+e.message);}}} style={{fontSize:'.65rem',background:'#ecfeff',color:'#155e75',border:'1px solid #a5f3fc',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>⬇ Tải</button>
                           {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
                           {isPending&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
                         </div>
                       </div>
+                      {/* SỬA #2: Bảng chi tiết các nhóm giá sàn (đọc d.groups) */}
+                      {floorStatus.expandFloorKey===((f._folder||floorStatus.activeTab)+'/'+f.name)&&(
+                        <div style={{marginTop:8,paddingTop:8,borderTop:'1px dashed #cbd5e1'}}>
+                          <div style={{fontSize:'.66rem',color:'#475569',fontWeight:700,marginBottom:5}}>💱 Tỷ giá: <strong>{d.exchangeRate?Number(d.exchangeRate).toLocaleString('vi-VN'):'?'}</strong> · 📊 {(d.groups||[]).length} nhóm ban hành</div>
+                          <div style={{overflowX:'auto'}}>
+                            <table className="tbl" style={{fontSize:'.66rem',width:'100%'}}>
+                              <thead><tr>
+                                <th style={{textAlign:'left'}}>Nhóm</th>
+                                <th style={{textAlign:'right'}}>Mác</th>
+                                <th style={{textAlign:'right'}}>Dày (mm)</th>
+                                <th style={{textAlign:'right'}}>TL (kg)</th>
+                                <th style={{textAlign:'right'}}>Sàn tự động</th>
+                                <th style={{textAlign:'right'}}>Sàn ban hành</th>
+                                <th style={{textAlign:'right'}}>Cốt lõi</th>
+                                <th style={{textAlign:'right'}}>Trung thành</th>
+                                <th style={{textAlign:'right'}}>Mới</th>
+                              </tr></thead>
+                              <tbody>
+                                {(d.groups||[]).map((g,gi)=>(
+                                  <tr key={gi}>
+                                    <td style={{textAlign:'left',fontWeight:700}}>{g.label||g.id}</td>
+                                    <td style={{textAlign:'right'}}>{g.alloy||''}{g.temper?(' '+g.temper):''}</td>
+                                    <td style={{textAlign:'right'}}>{g.minThick}{g.maxThick&&g.maxThick!==g.minThick?('–'+g.maxThick):''}</td>
+                                    <td style={{textAlign:'right'}}>{g.totalQty?Number(g.totalQty).toLocaleString('vi-VN'):''}</td>
+                                    <td style={{textAlign:'right',color:'#64748b'}}>{g.autoFloor?Number(g.autoFloor).toLocaleString('vi-VN'):''}</td>
+                                    <td style={{textAlign:'right',fontWeight:900,color:'#7c3aed'}}>{g.publishedFloor?Number(g.publishedFloor).toLocaleString('vi-VN'):''}</td>
+                                    <td style={{textAlign:'right'}}>{g.corePrice?Number(g.corePrice).toLocaleString('vi-VN'):''}</td>
+                                    <td style={{textAlign:'right'}}>{g.loyalPrice?Number(g.loyalPrice).toLocaleString('vi-VN'):''}</td>
+                                    <td style={{textAlign:'right'}}>{g.newPrice?Number(g.newPrice).toLocaleString('vi-VN'):''}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {Array.isArray(d.approvals)&&d.approvals.length>0&&(
+                            <div style={{marginTop:6,fontSize:'.62rem',color:'#334155'}}>
+                              {d.approvals.map((a,ai)=>(
+                                <div key={ai} style={{marginTop:2}}>{a.decision==='rejected'?'✗':'✓'} <strong>{a.name}</strong> ({a.role}) — {a.at?new Date(a.at).toLocaleString('vi-VN'):''}{a.opinion?(': '+a.opinion):''}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 });
