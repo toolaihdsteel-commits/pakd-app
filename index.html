@@ -2190,6 +2190,52 @@ const App=()=>{
     }
   },[ghAPI]);
 
+  // SỬA #1 (R4): XÓA 1 PA MUA trên GitHub — cần PIN QUẢN TRỊ / Giám đốc.
+  const deletePAFromGithub=useCallback(async(file)=>{
+    if(!window.confirm(`🗑 Xóa vĩnh viễn phương án MUA này?\n\nFile: ${file.name}\n\nKhông thể hoàn tác.`)) return;
+    const adminPin=await askPin('🔐 Cần PIN QUẢN TRỊ / Giám đốc để XÓA phương án MUA:');
+    if(adminPin===null) return;
+    const chk=await verifyAdminPin(adminPin);
+    if(!chk.ok){alert('❌ PIN quản trị SAI — không có quyền xóa.');return;}
+    setGhStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const data=await ghAPI('GET',`contents/plans/${file.name}`);
+      await ghAPI('DELETE',`contents/plans/${file.name}`,{
+        message:`🗑 Xóa PA Mua ${file.name} (xác nhận bởi ${chk.by||'quản trị'})`,
+        sha:data.sha,branch:ghConfig.branch||'main',
+      });
+      setGhStatus(p=>({...p,loading:false,lastAction:`🗑 Đã xóa ${file.name}`}));
+      alert(`🗑 Đã xóa PA Mua: ${file.name}\n(Xác nhận: ${chk.by||'quản trị'})`);
+      await listPAsFromGithub();
+    }catch(e){
+      setGhStatus(p=>({...p,loading:false,error:e.message}));
+      alert(`❌ Lỗi khi xóa PA:\n${e.message}`);
+    }
+  },[ghAPI,ghConfig.branch,askPin,verifyAdminPin,listPAsFromGithub]);
+
+  // SỬA #1 (R4): XÓA 1 PA SÀN trên GitHub (pending hoặc approved) — cần PIN QUẢN TRỊ / Giám đốc.
+  const deleteFloorSubmission=useCallback(async(file,folder)=>{
+    if(!window.confirm(`🗑 Xóa vĩnh viễn phương án GIÁ SÀN này?\n\nFile: ${file.name}\nThư mục: ${folder}\n\nKhông thể hoàn tác.`)) return;
+    const adminPin=await askPin('🔐 Cần PIN QUẢN TRỊ / Giám đốc để XÓA phương án SÀN:');
+    if(adminPin===null) return;
+    const chk=await verifyAdminPin(adminPin);
+    if(!chk.ok){alert('❌ PIN quản trị SAI — không có quyền xóa.');return;}
+    setFloorStatus(p=>({...p,loading:true,error:null}));
+    try{
+      const data=await ghAPI('GET',`contents/floor/${folder}/${file.name}`);
+      await ghAPI('DELETE',`contents/floor/${folder}/${file.name}`,{
+        message:`🗑 Xóa Sàn ${file.name} (${folder}, xác nhận bởi ${chk.by||'quản trị'})`,
+        sha:data.sha,branch:ghConfig.branch||'main',
+      });
+      setFloorStatus(p=>({...p,loading:false,lastAction:`🗑 Đã xóa ${file.name}`}));
+      alert(`🗑 Đã xóa PA Sàn: ${file.name}\n(Xác nhận: ${chk.by||'quản trị'})`);
+      await listFloorSubmissions();
+    }catch(e){
+      setFloorStatus(p=>({...p,loading:false,error:e.message}));
+      alert(`❌ Lỗi khi xóa Sàn:\n${e.message}`);
+    }
+  },[ghAPI,ghConfig.branch,askPin,verifyAdminPin,listFloorSubmissions]);
+
   // Duyệt 1 file Sàn pending → chuyển sang approved + append vào history.json
   // SỬA #1: Duyệt Sàn dùng hệ PIN nhiều người (approvers.json) — ký TUẦN TỰ theo Bước duyệt luồng Sàn (stepFloor), giống luồng Mua.
   const reviewFloorSubmission=useCallback(async(file,folder,newStatus)=>{
@@ -5531,6 +5577,8 @@ URL.revokeObjectURL(url);
                             const nx=prog.nextApprover;
                             return <button className="btn btn-success btn-xs" onClick={()=>setApproveModal({open:true,file:f,approver:nx})} disabled={ghStatus.loading} style={{fontSize:'.62rem'}} title={`Duyệt / cho ý kiến — nhập PIN để xác nhận. Đang chờ: ${nx.name} (${nx.role})`}>✍ Duyệt / Cho ý kiến</button>;
                           })()}
+                          {/* SỬA #1 (R4): Xóa PA — cần PIN quản trị/Giám đốc */}
+                          <button onClick={()=>deletePAFromGithub(f)} disabled={ghStatus.loading} title="Xóa phương án này (cần PIN Quản trị/Giám đốc)" style={{fontSize:'.6rem',background:'#fef2f2',color:'#b91c1c',border:'1px solid #fca5a5',padding:'2px 7px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>🗑 Xóa</button>
                         </div>
                       </div>
                     </div>
@@ -5650,7 +5698,8 @@ URL.revokeObjectURL(url);
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
-                            <span style={{fontSize:'.86rem',fontWeight:900,color:'#1d4ed8'}}>🗓 {d.weekLabel||f.name.replace('.json','')}</span>
+                            {/* SỬA #2 (R4): Hiện NGÀY GỬI chính xác dd/mm/yyyy + (tuần) thay vì chỉ W.. */}
+                            <span style={{fontSize:'.86rem',fontWeight:900,color:'#1d4ed8'}}>🗓 {d.savedAt?new Date(d.savedAt).toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric'}):f.name.replace('.json','')}{d.weekLabel?` (${d.weekLabel.replace(/^\d{4}-/,'')})`:''}</span>
                             <span style={{fontSize:'.6rem',fontWeight:900,background:badge.bg,color:badge.c,border:`1px solid ${badge.br}`,borderRadius:3,padding:'1px 6px'}}>{badge.t}</span>
                           </div>
                           <div style={{fontSize:'.66rem',color:'#0f172a',marginTop:3,fontWeight:700}}>
@@ -5692,6 +5741,8 @@ URL.revokeObjectURL(url);
                           <button onClick={()=>loadFloorSubmissionToApp(d,f.name)} title="Tải Sàn này vào màn hình (tỷ giá, Sàn ban hành, cờ trừ PO)" style={{fontSize:'.65rem',background:'#dcfce7',color:'#14532d',border:'1px solid #86efac',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>⬇ Tải về app</button>
                           {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
                           {isPending&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
+                          {/* SỬA #1 (R4): Xóa PA Sàn — cần PIN quản trị/Giám đốc */}
+                          <button onClick={()=>deleteFloorSubmission(f,floorStatus.activeTab)} disabled={floorStatus.loading} title="Xóa phương án Sàn này (cần PIN Quản trị/Giám đốc)" style={{fontSize:'.6rem',background:'#fef2f2',color:'#b91c1c',border:'1px solid #fca5a5',padding:'2px 7px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>🗑 Xóa</button>
                         </div>
                       </div>
                       {/* SỬA #2: Bảng chi tiết các nhóm giá sàn (đọc d.groups) */}
