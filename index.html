@@ -1076,8 +1076,8 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
   const planned_balance=cfRow?cfRow.hanMuc||0:0;  // TỔNG HẠN MỨC tuần đích (âm = hụt dòng)
   const planned_hmHD=cfRow?cfRow.hmHD||0:0;
   const planned_hmDD=cfRow?cfRow.hmDD||0:0;
-  // Số dư SAU khi cộng thêm phương án mua hiện tại vào tuần đích
-  const balanceAfterBuy=cfRow?(planned_balance-(tongMuaVal-planned_tong)):null;
+  // Số dư SAU khi duyệt PA mua — SỬA (R8): PA là khoản chi THÊM, dùng tổng phải trả gồm VAT.
+  const balanceAfterBuy=cfRow?(planned_balance-totalPayVal):null;
   // Đáy năm (số dư thấp nhất) để cảnh báo
   const minBalance=cashFlowData.length?Math.min(...cashFlowData.map(r=>r.balance!=null?r.balance:Infinity)):null;
   const delta_nhapNgoai=nhapNgoaiVal-planned_nhapNgoai;
@@ -1213,63 +1213,83 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
               <div style={{background:'#faf5ff',border:'1px solid #e9d5ff',borderRadius:5,padding:'6px 10px',fontSize:'.7rem',fontWeight:700,color:'#6b21a8'}}>
                 {cfRow.thang} – {cfRow.tuan}
               </div>
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th style={{textAlign:'left',width:'35%'}}>Chỉ tiêu</th>
-                    <th style={{background:'#dbeafe',color:'#1e3a8a'}}>KH ({targetWeek})</th>
-                    <th style={{background:'#f3e8ff',color:'#581c87'}}>PA Mua</th>
-                    <th style={{background:'#f0fdf4',color:'#14532d'}}>Chênh lệch</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    {l:'🛒 Nhập ngoại (HD+ĐĐ)',kh:planned_nhapNgoai,tt:nhapNgoaiVal},
-                    {l:'🏭 Mua & trả nợ nội',kh:planned_muaNoi,tt:0},
-                    {l:'📦 Tổng chi',kh:planned_tong,tt:tongMuaVal,bold:true},
-                    {l:'💵 Thu công nợ',kh:planned_thuCN,tt:null},
-                    {l:'📈 Thu theo KH bán',kh:planned_dtTM,tt:null},
-                    {l:'💰 Tổng thu KH',kh:planned_thu,tt:null,bold:true},
-                    {l:'➖ Chênh lệch Thu−Chi trong tuần',kh:planned_rong,tt:null,isBalance:true},
-                    {l:'   ↳ Hạn mức HD',kh:planned_hmHD,tt:null,isBalance:true},
-                    {l:'   ↳ Hạn mức ĐĐ',kh:planned_hmDD,tt:null,isBalance:true},
-                    {l:'⚖️ TỔNG HẠN MỨC (âm = hụt dòng)',kh:planned_balance,tt:null,isBalance:true,bold:true},
-                  ].map((row,i)=>{
-                    const delta=row.tt!=null?row.tt-(row.kh||0):null;
-                    return(
-                      <tr key={i} style={{background:i%2?'#f8fafc':'#fff',fontWeight:row.bold?800:500}}>
-                        <td style={{paddingLeft:8,fontSize:'.75rem'}}>{row.l}</td>
+              {/* SỬA (R8): Bảng 3 cột KH | + PA mua | = Tổng sau duyệt — logic tài chính cho người duyệt */}
+              {(()=>{
+                const tongChiAfter=planned_tong+totalPayVal;          // chi tuần sau khi thêm PA (gồm VAT)
+                const rongAfter=planned_rong-totalPayVal;             // ròng Thu−Chi sau PA
+                const finalLimit=planned_balance-totalPayVal;         // TỔNG HẠN MỨC sau khi duyệt PA này
+                const rows=[
+                  {l:'🛒 Nhập ngoại (HĐ+ĐĐ)',kh:planned_nhapNgoai,pa:nhapNgoaiVal,tong:planned_nhapNgoai+nhapNgoaiVal},
+                  {l:'🏭 Mua & trả nợ nội',kh:planned_muaNoi,pa:null,tong:planned_muaNoi},
+                  {l:'🧾 VAT 10% (của PA mua)',kh:null,pa:vatVal,tong:null,muted:true},
+                  {l:'📦 TỔNG CHI tuần (gồm VAT)',kh:planned_tong,pa:totalPayVal,tong:tongChiAfter,bold:true},
+                  {l:'💵 Thu công nợ',kh:planned_thuCN,pa:null,tong:planned_thuCN},
+                  {l:'📈 Thu theo KH bán',kh:planned_dtTM,pa:null,tong:planned_dtTM},
+                  {l:'💰 TỔNG THU KH',kh:planned_thu,pa:null,tong:planned_thu,bold:true},
+                  {l:'➖ Chênh lệch Thu−Chi tuần',kh:planned_rong,pa:-totalPayVal,tong:rongAfter,signed:true},
+                  {l:'   ↳ Hạn mức HĐ',kh:planned_hmHD,pa:null,tong:null,muted:true,signedKh:true},
+                  {l:'   ↳ Hạn mức ĐĐ',kh:planned_hmDD,pa:null,tong:null,muted:true,signedKh:true},
+                  {l:'⚖️ TỔNG HẠN MỨC',kh:planned_balance,pa:-totalPayVal,tong:finalLimit,signed:true,bold:true,hl:true},
+                ];
+                return(<>
+                <table className="tbl">
+                  <thead>
+                    <tr>
+                      <th style={{textAlign:'left',width:'34%'}}>Chỉ tiêu</th>
+                      <th style={{background:'#dbeafe',color:'#1e3a8a'}}>KH ({targetWeek})</th>
+                      <th style={{background:'#f3e8ff',color:'#581c87'}}>+ PA mua (này)</th>
+                      <th style={{background:'#fef9c3',color:'#854d0e'}}>= Tổng sau duyệt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row,i)=>(
+                      <tr key={i} style={{background:row.hl?'#fffbeb':i%2?'#f8fafc':'#fff',fontWeight:row.bold?800:500,borderTop:row.hl?'2px solid #fcd34d':undefined}}>
+                        <td style={{paddingLeft:8,fontSize:'.74rem'}}>{row.l}</td>
                         <td style={{textAlign:'right',paddingRight:6}}>
-                          <span className="mono" style={{fontSize:'.75rem',fontWeight:700,color:'#1d4ed8'}}>{row.kh!=null?fB(row.kh):'—'}</span>
+                          {row.kh!=null?<span className="mono" style={{fontSize:'.74rem',fontWeight:700,color:(row.signed||row.signedKh)?(row.kh<0?'#dc2626':'#16a34a'):'#1d4ed8'}}>{fB(row.kh)}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}
                         </td>
                         <td style={{textAlign:'right',paddingRight:6}}>
-                          {row.tt!=null?<span className="mono" style={{fontSize:'.75rem',fontWeight:800,color:'#7c3aed'}}>{fB(row.tt)}</span>
-                            :row.isBalance?<span className="mono" style={{fontSize:'.75rem',fontWeight:800,color:row.kh<0?'#dc2626':'#16a34a'}}>{fB(row.kh)}</span>
-                            :<span style={{color:'#94a3b8',fontSize:'.7rem'}}>—</span>}
+                          {row.pa!=null?<span className="mono" style={{fontSize:'.74rem',fontWeight:800,color:'#7c3aed'}}>{row.pa>0?'+':''}{fB(row.pa)}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}
                         </td>
-                        <td style={{textAlign:'right',paddingRight:6}}>
-                          {delta!=null?<span className="mono" style={{fontSize:'.75rem',fontWeight:800,color:delta>0?'#dc2626':'#16a34a'}}>{delta>=0?'+':''}{fB(delta)}</span>:<span style={{color:'#94a3b8',fontSize:'.7rem'}}>—</span>}
+                        <td style={{textAlign:'right',paddingRight:6,background:row.hl?'#fef3c7':undefined}}>
+                          {row.tong!=null?<span className="mono" style={{fontSize:row.hl?'.82rem':'.74rem',fontWeight:row.hl?900:800,color:row.signed?(row.tong<0?'#dc2626':'#16a34a'):'#0f172a'}}>{fB(row.tong)}</span>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}
                         </td>
                       </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {/* HỘP KẾT LUẬN cho người duyệt */}
+                <div style={{background:finalLimit<0?'#fef2f2':'#f0fdf4',border:'2px solid '+(finalLimit<0?'#fca5a5':'#86efac'),borderRadius:8,padding:'11px 14px',marginTop:4}}>
+                  <div style={{fontSize:'.84rem',fontWeight:900,color:finalLimit<0?'#991b1b':'#14532d',marginBottom:5}}>
+                    {finalLimit<0?`🔴 Sau khi duyệt PA này, tuần ${targetWeek} HỤT DÒNG ${fB(Math.abs(finalLimit))}`:`✅ Sau khi duyệt PA này, tuần ${targetWeek} vẫn DƯ DÒNG ${fB(finalLimit)}`}
+                  </div>
+                  <div style={{fontSize:'.7rem',fontWeight:700,color:'#475569',lineHeight:1.6}}>
+                    Hạn mức tuần (KH): <strong style={{color:planned_balance<0?'#dc2626':'#16a34a'}}>{fB(planned_balance)}</strong>
+                    &nbsp;−&nbsp; PA mua phải trả (gồm VAT): <strong style={{color:'#7c3aed'}}>{fB(totalPayVal)}</strong>
+                    &nbsp;=&nbsp; <strong style={{color:finalLimit<0?'#dc2626':'#16a34a'}}>{fB(finalLimit)}</strong>
+                  </div>
+                  {/* THƯỚC ĐO trước/sau */}
+                  {(()=>{
+                    const scale=Math.max(Math.abs(planned_balance),Math.abs(finalLimit),totalPayVal,1);
+                    const pct=v=>Math.min(100,Math.abs(v)/scale*100);
+                    const Bar=({label,val})=>(
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:4}}>
+                        <span style={{fontSize:'.6rem',fontWeight:700,color:'#64748b',width:64,flexShrink:0}}>{label}</span>
+                        <div style={{flex:1,height:12,background:'#f1f5f9',borderRadius:3,position:'relative',overflow:'hidden'}}>
+                          <div style={{position:'absolute',top:0,bottom:0,left:0,width:pct(val)+'%',background:val<0?'#dc2626':'#16a34a',opacity:.85}}/>
+                        </div>
+                        <span className="mono" style={{fontSize:'.66rem',fontWeight:800,color:val<0?'#dc2626':'#16a34a',width:72,textAlign:'right',flexShrink:0}}>{fB(val)}</span>
+                      </div>
                     );
-                  })}
-                </tbody>
-              </table>
-              {affordPct!=null&&(
-                <div style={{background:affordPct>100?'#fee2e2':affordPct>80?'#fef9c3':'#dcfce7',border:'1px solid '+(affordPct>100?'#fca5a5':affordPct>80?'#fde047':'#86efac'),borderRadius:6,padding:'8px 12px'}}>
-                  <div style={{fontSize:'.72rem',fontWeight:800,color:'#0f172a',marginBottom:4}}>
-                    {affordPct>100?'⚠ Vượt KH thu '+(affordPct-100).toFixed(1)+'%'
-                      :affordPct>80?'⚡ Sát KH – chiếm '+affordPct.toFixed(1)+'%'
-                      :'✓ Trong KH – chiếm '+affordPct.toFixed(1)+'%'}
-                  </div>
-                  <div className="stock-bar" style={{height:7}}>
-                    <div className="stock-bar-fill" style={{width:Math.min(100,affordPct)+'%',background:affordPct>100?'#dc2626':affordPct>80?'#f59e0b':'#16a34a'}}/>
-                  </div>
-                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'.6rem',color:'#64748b',marginTop:2}}>
-                    <span>0</span><span>KH Thu: {fB(tongThuKH)}</span>
-                  </div>
+                    return(<div style={{marginTop:7,borderTop:'1px dashed '+(finalLimit<0?'#fca5a5':'#86efac'),paddingTop:6}}>
+                      <Bar label="Trước PA" val={planned_balance}/>
+                      <Bar label="Sau PA" val={finalLimit}/>
+                    </div>);
+                  })()}
+                  {affordPct!=null&&<div style={{fontSize:'.64rem',color:'#64748b',fontWeight:600,marginTop:6}}>💡 PA mua (gồm VAT) chiếm <strong style={{color:affordPct>100?'#dc2626':affordPct>80?'#b45309':'#15803d'}}>{((totalPayVal/(tongThuKH||1))*100).toFixed(1)}%</strong> tổng thu KH tuần ({fB(tongThuKH)}).</div>}
                 </div>
-              )}
+                </>);
+              })()}
             </div>
             )}
           </div>
