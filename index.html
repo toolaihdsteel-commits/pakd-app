@@ -826,7 +826,8 @@ const defUpdatedImport=[
   {id:5,updateDate:'30/03/2026',alloy:'A5052',temper:'H32',minThick:1.0,maxThick:99.0,priceFC:4090,note:'CIF HPH',importCoef:1.015,competitorPrice:109000,competitorFloorPrice:106000},
 ];
 const defInputs={
-  supplierName:'Yuwon Steel',creator:'Nguyễn Văn A',
+  supplierName:'',creator:'Nguyễn Văn A',
+  supplierPaymentTerms:'', // SỬA #1 (R7): phương thức thanh toán của NCC (nhập tay, độc lập T/T-L/C)
   paymentMethod:'TT',capitalCostPercent:7.8,
   lcMargin:10,lcDays:90,lcOpenFee:0.2,lcInterest:5.8,
   exchangeRate:0,managementFee:1.5,
@@ -3308,6 +3309,15 @@ URL.revokeObjectURL(url);
                     <div><label className="lbl">Int%</label><input type="number" step=".1" className="inp inp-xs font-semibold" value={inputs.lcInterest} onChange={e=>setInp('lcInterest',parseFloat(e.target.value)||0)}/></div>
                   </div>
                 )}
+                {/* SỬA #1 (R7): NCC + Phương thức thanh toán NCC (nhập tay) + Thời gian giao hàng (hiển thị) */}
+                <div style={{marginTop:8,borderTop:`1px dashed ${border1}`,paddingTop:7,display:'flex',flexDirection:'column',gap:6}}>
+                  <div><label className="lbl" style={{color:'#0f766e'}}>🏭 Nhà cung cấp</label><input className="inp inp-xs" style={{fontWeight:700,color:'#0f766e'}} placeholder="Nhập tên NCC…" value={inputs.supplierName||''} onChange={e=>setInp('supplierName',e.target.value)}/></div>
+                  <div><label className="lbl" style={{color:'#9333ea'}}>💳 Phương thức thanh toán (NCC)</label><input className="inp inp-xs" style={{fontWeight:700,color:'#7c3aed'}} placeholder="VD: T/T 30% trước, 70% sau 60 ngày…" value={inputs.supplierPaymentTerms||''} onChange={e=>setInp('supplierPaymentTerms',e.target.value)}/></div>
+                  <div>
+                    <label className="lbl" style={{color:'#1e40af'}}>🚢 Thời gian giao hàng (tuần Cont về)</label>
+                    <div className="inp inp-xs mono" style={{fontWeight:800,color:'#1e40af',background:'#eff6ff',border:'1px solid #bfdbfe',display:'flex',alignItems:'center'}} title="Lấy theo 'Tuần Cont về' ở thanh công cụ (dùng tính dòng tiền) — chỉ hiển thị">{cfMode==='manual'&&cfManualWeek?cfManualWeek:getCurrentWeekLabel()}</div>
+                  </div>
+                </div>
                 {/* II.5: Invoice, QL, CP TC summary */}
                 {result&&(
                   <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:4}}>
@@ -5275,12 +5285,14 @@ URL.revokeObjectURL(url);
                         </div>
                         <table className="tbl" style={{fontSize:'.72rem'}}>
                           <thead><tr>
-                            <th style={{textAlign:'left'}}>SKU</th><th>TL đặt</th><th>Đã giao</th><th>Còn thiếu</th><th>Kho đáp ứng</th><th>Đang về</th><th>Cần đặt thêm</th>
+                            <th style={{textAlign:'left'}}>SKU</th><th style={{background:'#ecfdf5',color:'#065f46'}}>💰 Đơn giá bán KH<div style={{fontSize:'.52rem',fontWeight:600,opacity:.8}}>đ/kg</div></th><th>TL đặt</th><th>Đã giao</th><th>Còn thiếu</th><th>Kho đáp ứng</th><th>Đang về</th><th>Cần đặt thêm</th>
                           </tr></thead>
                           <tbody>
                             {items.map((p,i)=>(
                               <tr key={i} style={p.needBuy>0?{background:'#fff7ed'}:{}}>
                                 <td style={{textAlign:'left'}}><SkuLabelCell row={p}/></td>
+                                {/* SỬA #2 (R7): Đơn giá bán cho khách (cột Đơn giá trong sheet PO) */}
+                                <td className="mono" style={{textAlign:'right',fontWeight:900,color:p.price>0?'#047857':'#cbd5e1',background:'#f0fdf4'}}>{p.price>0?fv(p.price):'—'}</td>
                                 <td className="mono" style={{textAlign:'right'}}>{fv(p.ordered)}</td>
                                 <td className="mono" style={{textAlign:'right',color:'#15803d'}}>{fv(p.delivered)}</td>
                                 <td className="mono" style={{textAlign:'right',fontWeight:800,color:p.remaining>0?'#b45309':'#64748b'}}>{fv(p.remaining)}</td>
@@ -5320,6 +5332,12 @@ URL.revokeObjectURL(url);
               <div className="print-box"><div className="print-box-title">CP về kho %</div><div className="print-box-value" style={{fontSize:'12pt',color:'#6d28d9'}}>{inputs.managementFee}%</div></div>
               <div className="print-box"><div className="print-box-title">Thanh toán</div><div className="print-box-value text-blue">{inputs.paymentMethod}</div></div>
               <div className="print-box"><div className="print-box-title">Tổng khối lượng</div><div className="print-box-value text-green">{fv(result.totalKg)} kg</div></div>
+            </div>
+            {/* SỬA #1 (R7): NCC + PTTT NCC + Thời gian giao hàng */}
+            <div className="print-grid-4" style={{marginTop:6}}>
+              <div className="print-box"><div className="print-box-title">Nhà cung cấp</div><div className="print-box-value" style={{fontSize:'11pt',color:'#0f766e'}}>{inputs.supplierName||'—'}</div></div>
+              <div className="print-box" style={{gridColumn:'span 2'}}><div className="print-box-title">Phương thức thanh toán (NCC)</div><div className="print-box-value" style={{fontSize:'10pt',color:'#7c3aed'}}>{inputs.supplierPaymentTerms||'—'}</div></div>
+              <div className="print-box"><div className="print-box-title">Thời gian giao hàng</div><div className="print-box-value text-blue" style={{fontSize:'11pt'}}>{cfMode==='manual'&&cfManualWeek?cfManualWeek:getCurrentWeekLabel()}</div></div>
             </div>
           </div>
           <div className="print-section">
