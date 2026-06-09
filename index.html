@@ -1068,7 +1068,9 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
   const cfRow=cashFlowData.find(r=>matchWeekLabel(r.tuan,targetWeek));
   const planned_nhapNgoai=cfRow?cfRow.nhapNgoai||0:0;
   const planned_muaNoi=cfRow?cfRow.muaNoi||0:0;
-  const planned_tong=(cfRow?cfRow.nhapNgoai||0:0)+(cfRow?cfRow.muaNoi||0:0);
+  const planned_chiKhac=cfRow?cfRow.chiKhac||0:0; // SỬA (R8b): Chi khác — trước đây bị bỏ sót khỏi Tổng chi
+  // SỬA (R8b): Tổng chi LẤY ĐÚNG cfRow.tongChi (gồm Chi khác), KHÔNG dùng nhapNgoai+muaNoi (thiếu Chi khác → sai như tuần 33)
+  const planned_tong=cfRow?(cfRow.tongChi!=null?cfRow.tongChi:(cfRow.nhapNgoai||0)+(cfRow.muaNoi||0)+(cfRow.chiKhac||0)):0;
   const planned_thu=cfRow?cfRow.tongThu||0:0;
   const planned_dtTM=cfRow?cfRow.dtTM||0:0;
   const planned_thuCN=cfRow?cfRow.thuCN||0:0;
@@ -1221,6 +1223,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
                 const rows=[
                   {l:'🛒 Nhập ngoại (HĐ+ĐĐ)',kh:planned_nhapNgoai,pa:nhapNgoaiVal,tong:planned_nhapNgoai+nhapNgoaiVal},
                   {l:'🏭 Mua & trả nợ nội',kh:planned_muaNoi,pa:null,tong:planned_muaNoi},
+                  {l:'📋 Chi khác (theo KH)',kh:planned_chiKhac,pa:null,tong:planned_chiKhac,muted:true},
                   {l:'🧾 VAT 10% (của PA mua)',kh:null,pa:vatVal,tong:null,muted:true},
                   {l:'📦 TỔNG CHI tuần (gồm VAT)',kh:planned_tong,pa:totalPayVal,tong:tongChiAfter,bold:true},
                   {l:'💵 Thu công nợ',kh:planned_thuCN,pa:null,tong:planned_thuCN},
