@@ -1475,6 +1475,8 @@ const App=()=>{
   const [allRawImportPrices,setAllRawImportPrices]=useState(defUpdatedImport); // unfiltered for prev-week calc
   const [scenarios,setScenarios]=useState(()=>{try{const s=localStorage.getItem('pakd_scenarios');return s?JSON.parse(s):[];}catch(e){return [];}});
   const [invFilter,setInvFilter]=useState({status:'ALL',alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:'',costMin:'',costMax:''});
+  const [invGroupView,setInvGroupView]=useState(false);   // SỬA #5 (R6): bật bảng gom theo SKU
+  const [invGroupMinKg,setInvGroupMinKg]=useState('');    // SỬA #5 (R6): lọc SKU có tổng KL ≥ ngưỡng
   const [msFilter,setMsFilter]=useState({alloy:'ALL',coating:'ALL',stockAlert:'ALL',search:'',onlyBuyReq:false});
   const [spFilter,setSpFilter]=useState({alloy:'ALL',coating:'ALL',search:''});
   const [fpFilter,setFpFilter]=useState({alloy:'ALL',coating:'ALL',search:'',thickMin:'',thickMax:''});
@@ -1499,6 +1501,7 @@ const App=()=>{
   const [poFilter,setPoFilter]=useState({supplier:'ALL',search:'',onlyShort:false});
   const [excludePO,setExcludePO]=useState(false);          // tab Tồn kho: trừ TL PO chưa giao
   const [excludePOFloor,setExcludePOFloor]=useState(false); // tab Giá sàn: trừ TL PO khỏi tính giá
+  const [excludePOMs,setExcludePOMs]=useState(false);       // SỬA #6 (R6): tab Min/Max: trừ TL PO chưa giao khỏi tồn hiện tại
 
   // ═══════════════════════════════════════════════════════
   // GITHUB CLOUD STORAGE - Lưu PA mua lên repo GitHub Private
@@ -1582,14 +1585,14 @@ const App=()=>{
         id:'d'+Date.now(),
         label:label.trim()||nameDefault,
         savedAt:new Date().toISOString(),
-        inputs,products,
+        inputs,products,sellingPrices,
         snapshot:{totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0},
       });
       localStorage.setItem('pakd_local_drafts',JSON.stringify(drafts.slice(0,100)));
       setLocalDrafts(drafts.slice(0,100));
       alert('✓ Đã lưu nháp trên máy này (localStorage). Mở bằng nút "💾 Nháp Local".');
     }catch(e){ alert('❌ Lỗi lưu nháp: '+e.message); }
-  },[inputs,products]);
+  },[inputs,products,sellingPrices]);
 
   // SỬA #4: Lưu nháp Giá sàn vào localStorage (KHÔNG đẩy GitHub). Tải lại y nguyên trạng thái tab Sàn.
   const saveFloorLocal=useCallback(()=>{
@@ -1675,7 +1678,7 @@ const App=()=>{
         requestNote:(opinion||'').trim()||null,version:'PAKD 7.9',flow:'buy',
         status:prog2.done?'approved':'pending',
         approvals,approvedBy:prog2.done?me.name:null,approvedAt:prog2.done?now.toISOString():null,approveNote:null,
-        inputs,products,
+        inputs,products,sellingPrices,
         snapshot:{inventoryCount:inventory.length,totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0}
       };
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
@@ -1686,7 +1689,7 @@ const App=()=>{
       setGhStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi trình duyệt:\n${e.message}`);
     }
-  },[ghAPI,inputs,products,inventory,ghConfig.branch,approvers,loadApprovers,askPin,sha256]);
+  },[ghAPI,inputs,products,sellingPrices,inventory,ghConfig.branch,approvers,loadApprovers,askPin,sha256]);
   // List các PA đã lưu (kèm fetch metadata: status, requestedBy, requestNote)
   const listPAsFromGithub=useCallback(async()=>{
     setGhStatus(p=>({...p,loading:true,error:null}));
@@ -1730,6 +1733,8 @@ const App=()=>{
       const payload=JSON.parse(content);
       if(payload.inputs) setInputs(payload.inputs);
       if(payload.products) setProducts(payload.products);
+      // SỬA #3 (R6): khôi phục Giá bán KH (sellingPrices) để sếp tải PA thấy đủ giá bán theo SKU
+      if(Array.isArray(payload.sellingPrices)&&payload.sellingPrices.length>0) setSP(payload.sellingPrices);
       setLoadedApprovals(Array.isArray(payload.approvals)?payload.approvals:[]);
       setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã tải ${file.name}`,loadOpen:false}));
       const statusTxt=payload.status==='approved'?`\n✓ Trạng thái: ĐÃ DUYỆT bởi ${payload.approvedBy||'?'} lúc ${payload.approvedAt||'?'}`:payload.status==='rejected'?`\n✗ Trạng thái: TỪ CHỐI`:`\n⏳ Trạng thái: CHỜ DUYỆT`;
@@ -1809,6 +1814,11 @@ const App=()=>{
       const prog=approvalProgress(apList,approvals,flow);
       if(prog.rejected){alert('⚠ PA đã bị từ chối ở bước trước.');setGhStatus(p=>({...p,loading:false}));return false;}
       if(prog.done){alert('✓ PA đã được duyệt đủ cấp (bước cao nhất đã ký) rồi.');setGhStatus(p=>({...p,loading:false}));return false;}
+      // SỬA #4 (R6): CHỈ bước CAO NHẤT (Giám đốc) được TỪ CHỐI. Bước giữa chỉ duyệt/cho ý kiến.
+      if(decision==='rejected'&&stepOf(ap,flow)<(prog.maxStep||0)){
+        alert(`⚠ Bạn (${ap.name} · bước ${stepOf(ap,flow)}) chỉ có quyền DUYỆT/cho ý kiến, KHÔNG được từ chối.\nChỉ người ở bước cao nhất (bước ${prog.maxStep}) mới được bác phương án.`);
+        setGhStatus(p=>({...p,loading:false}));return false;
+      }
       // SỬA #2 (R3): cho phép ký nếu bước của người này > bước cao nhất đã ký (được nhảy bước, bỏ qua bước thấp hơn).
       // Chặn nếu bước người này <= bước đã ký (đã bị vượt qua → không cần ý kiến nữa).
       if(decision==='approved'){
@@ -2276,6 +2286,11 @@ const App=()=>{
     if(!signer){setFloorStatus(p=>({...p,loading:false}));alert('❌ PIN không khớp người duyệt nào.');return;}
     const myStep=stepOf(signer,'floor');
     if(myStep<=0){setFloorStatus(p=>({...p,loading:false}));alert(`⚠ Bạn (${signer.name}) không nằm trong luồng duyệt SÀN.`);return;}
+    // SỬA #4 (R6): CHỈ bước CAO NHẤT được TỪ CHỐI/BÁC. Bước giữa chỉ duyệt.
+    if(newStatus==='rejected'&&myStep<(prog.maxStep||0)){
+      setFloorStatus(p=>({...p,loading:false}));
+      alert(`⚠ Bạn (${signer.name} · bước ${myStep}) chỉ có quyền DUYỆT, KHÔNG được bác.\nChỉ người ở bước cao nhất (bước ${prog.maxStep}) mới được bác Sàn.`);return;
+    }
     if(newStatus==='approved'&&myStep<=(prog.topSigned||0)){
       setFloorStatus(p=>({...p,loading:false}));
       alert(`⚠ Bước của bạn (${myStep}) đã được vượt qua (bước cao nhất đã ký: ${prog.topSigned}). Không cần ý kiến nữa.`);return;
@@ -2373,7 +2388,7 @@ const App=()=>{
   },[ghAPI]);
 
   // Tải history.json về xem ở tab Lịch sử + ĐỔ VÀO floorHistory state để bảng chi tiết hiển thị
-  const loadFloorHistoryFromGithub=useCallback(async()=>{
+  const loadFloorHistoryFromGithub=useCallback(async(silent=false)=>{
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
       const d=await ghAPI('GET','contents/floor/history.json');
@@ -2398,9 +2413,11 @@ const App=()=>{
       });
       setFloorHistory(mapped);
       try{localStorage.setItem('pakd_floor_history',JSON.stringify(mapped));}catch(e){}
-      setFloorStatus(p=>({...p,loading:false,history:safeArr,historyOpen:true,lastAction:`✓ Đã tải ${safeArr.length} bản từ history.json`}));
+      // SỬA #2 (R6): silent=true (gọi từ Sync All) → KHÔNG mở modal, chỉ nạp dữ liệu.
+      setFloorStatus(p=>({...p,loading:false,history:safeArr,historyOpen:silent?p.historyOpen:true,lastAction:`✓ Đã tải ${safeArr.length} bản từ history.json`}));
     }catch(e){
-      setFloorStatus(p=>({...p,loading:false,error:e.message,history:[],historyOpen:true}));
+      // silent → nuốt lỗi (vd chưa có file history.json), không bật modal
+      setFloorStatus(p=>({...p,loading:false,error:silent?p.error:e.message,history:silent?p.history:[],historyOpen:silent?p.historyOpen:true}));
     }
   },[ghAPI]);
 
@@ -2582,7 +2599,11 @@ const App=()=>{
         if(parsed.length>0) setMonthlyRevenue(parsed);
       }
     }catch(e2){console.warn('MonthlyRevenue fetch failed:',e2.message);}
-  },[]);
+    // SỬA #2 (R6): Sync All cũng tải Lịch sử Sàn từ CLOUD (GitHub /floor/history.json) — chế độ silent (không bật modal).
+    if(which==='all'){
+      try{ await loadFloorHistoryFromGithub(true); }catch(e3){console.warn('Floor history cloud:',e3.message);}
+    }
+  },[loadFloorHistoryFromGithub]);
 
   const result=useMemo(()=>{
     const totalKg=products.reduce((s,p)=>s+p.qtyKg,0);if(totalKg<=0) return null;
@@ -3081,6 +3102,36 @@ URL.revokeObjectURL(url);
     return true;
   }),[inventory,invFilter,minStockMap,maxStockMap]);
 
+  // SỬA #5 (R6): Gom theo SKU — mỗi SKU 1 dòng (tổng kho + đang về), trừ PO nếu đang bật, lọc theo ngưỡng KL, sắp xếp giảm dần.
+  const invSkuGrouped=useMemo(()=>{
+    const groups=groupBySku(inventory);
+    const minKg=parseFloat(String(invGroupMinKg).replace(/\./g,'').replace(/,/g,'.'))||0;
+    const rows=groups.map(g=>{
+      const stockKg=g.inStock.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0);
+      const transitKg=g.inTransit.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0);
+      const gross=stockKg+transitKg;
+      const allItems=[...g.inStock,...g.inTransit];
+      const avgCost=weightedAvg(allItems.map(x=>({qtyKg:parseFloat(x.qtyKg)||0,avgCost:parseFloat(x.avgCost)||0})));
+      // trừ PO chưa giao (dùng chung cờ excludePO của tab Tồn kho)
+      const poRem=excludePO?((poByKey[skuKeyNorm(g.inStock[0]||g.inTransit[0]||g)]||{}).remaining||0):0;
+      const netStock=Math.max(stockKg-poRem,0);
+      const netTransit=Math.max(transitKg-Math.max(poRem-stockKg,0),0);
+      const net=netStock+netTransit;
+      const k=g.key;const ms=minStockMap[k]||0;const mx=maxStockMap[k];
+      return {...g,stockKg,transitKg,gross,netStock,netTransit,net,poCut:gross-net,avgCost,totalVND:net*avgCost,lines:allItems.length,minStock:ms,maxStock:mx};
+    })
+    // áp filter alloy/coating/search giống bảng chi tiết
+    .filter(g=>{
+      if(invFilter.alloy!=='ALL'&&g.alloy!==invFilter.alloy) return false;
+      if(invFilter.coating!=='ALL'&&(g.coating||'KP')!==invFilter.coating) return false;
+      if(invFilter.search){const s=invFilter.search.toLowerCase();if(!String(g.label||'').toLowerCase().includes(s)) return false;}
+      if(g.net<minKg) return false;
+      return true;
+    })
+    .sort((a,b)=>b.net-a.net);
+    return rows;
+  },[inventory,invGroupMinKg,invFilter.alloy,invFilter.coating,invFilter.search,excludePO,poByKey,minStockMap,maxStockMap]);
+
   const filteredMs=useMemo(()=>minStockRows.filter(r=>{
     if(msFilter.alloy!=='ALL'&&r.alloy!==msFilter.alloy) return false;
     if(msFilter.coating!=='ALL'&&(r.coating||'KP')!==msFilter.coating) return false;
@@ -3107,12 +3158,24 @@ URL.revokeObjectURL(url);
     return true;
   }),[sellingPrices,spFilter]);
 
-  const filtMsTotalKg=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);const cur=grp?[...grp.inStock,...grp.inTransit].reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0;return s+cur;},0);
-  const filtMsTotalStock=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);return s+(grp?grp.inStock.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0);},0);
-  const filtMsTotalTransit=filteredMs.reduce((s,r)=>{const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);return s+(grp?grp.inTransit.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0);},0);
+  // SỬA #6 (R6): helper net stock/transit theo SKU sau khi trừ PO (nếu bật excludePOMs)
+  const msNetQty=(r)=>{
+    const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);
+    const gS=grp?grp.inStock.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0;
+    const gT=grp?grp.inTransit.reduce((ss,x)=>ss+(parseFloat(x.qtyKg)||0),0):0;
+    const po=excludePOMs?((poByKey[skuKeyNorm(r)]||{}).remaining||0):0;
+    const nS=Math.max(gS-po,0);const nT=Math.max(gT-Math.max(po-gS,0),0);
+    return {stock:nS,transit:nT,total:nS+nT};
+  };
+  const filtMsTotalKg=filteredMs.reduce((s,r)=>s+msNetQty(r).total,0);
+  const filtMsTotalStock=filteredMs.reduce((s,r)=>s+msNetQty(r).stock,0);
+  const filtMsTotalTransit=filteredMs.reduce((s,r)=>s+msNetQty(r).transit,0);
   const filtMsTotalMin=filteredMs.reduce((s,r)=>s+(parseFloat(r.minStockKg)||0),0);
   const filtMsTotalMax=filteredMs.reduce((s,r)=>s+(r.maxStockKg?parseFloat(r.maxStockKg):0),0);
   const filtMsDelta=filtMsTotalKg-filtMsTotalMin;
+  // SỬA #1 (R6): Tổng 🛒 Đề xuất mua (cộng các giá trị số trong cột buyRequest) + đếm số mã có đề xuất.
+  const filtMsTotalBuyReq=filteredMs.reduce((s,r)=>{const v=parseFloat(String(r.buyRequest||'').replace(/[^\d.,-]/g,'').replace(/\./g,'').replace(/,/g,'.'))||0;return s+v;},0);
+  const filtMsBuyReqRows=filteredMs.filter(r=>String(r.buyRequest||'').trim()!=='').length;
 
   const bg1='#f8fafc',bg2='#ffffff',bg4='#f1f5f9';
   const border1='#e2e8f0',border2='#cbd5e1';
@@ -3654,6 +3717,8 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📦 Tồn kho chi tiết theo SKU + Coating</h2>
                 <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  {/* SỬA #5 (R6): Toggle Gom theo SKU */}
+                  <button className={`btn btn-sm ${invGroupView?'btn-teal':'btn-ghost'}`} onClick={()=>setInvGroupView(v=>!v)} title="Gom tất cả mã cùng SKU (kho + đang về) thành 1 nhóm để xem SKU nào tồn quá nhiều" style={{border:invGroupView?undefined:'1px solid #5eead4',color:invGroupView?undefined:'#0f766e'}}>{invGroupView?'✓ Đang gom SKU':'📊 Gom theo SKU'}</button>
                   <button className={`btn btn-sm ${excludePO?'btn-purple':'btn-ghost'}`} onClick={()=>setExcludePO(v=>!v)} disabled={poData.length===0} title={poData.length===0?'Cần Sync PO trước (tab 📑 PO đã ký)':'Trừ trọng lượng PO chưa giao khỏi tồn kho để ra Khả dụng hợp lý'} style={{border:excludePO?undefined:'1px solid #c4b5fd',color:excludePO?undefined:'#6d28d9'}}>
                     {excludePO?'✓ Đang trừ PO':'➖ Loại bỏ SKU đã có PO'}
                   </button>
@@ -3718,6 +3783,69 @@ URL.revokeObjectURL(url);
                 <span style={{fontSize:'.62rem',color:'#64748b',fontWeight:600,marginLeft:'auto'}}>Lọc theo giá vốn từng dòng tồn kho</span>
               </div>
               {dbStatus.error&&<div style={{background:'#fee2e2',border:'1px solid #fca5a5',borderRadius:6,padding:'9px 13px',marginBottom:13,fontSize:'.78rem',color:'#b91c1c',fontWeight:700}}><Ic.Alert/> {dbStatus.error}</div>}
+              {/* SỬA #5 (R6): BẢNG GOM THEO SKU — xem SKU nào tồn quá nhiều */}
+              {invGroupView&&(()=>{
+                const totNet=invSkuGrouped.reduce((s,g)=>s+g.net,0);
+                const totVND=invSkuGrouped.reduce((s,g)=>s+g.totalVND,0);
+                return(
+                <div>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:11,background:'#f0fdfa',border:'1px solid #5eead4',borderRadius:6,padding:'8px 12px'}}>
+                    <span style={{fontSize:'.7rem',fontWeight:800,color:'#0f766e',whiteSpace:'nowrap'}}>📊 Gom theo SKU — lọc tổng KL ≥</span>
+                    <div style={{display:'flex',alignItems:'center',gap:4,background:'#fff',border:'1px solid #5eead4',borderRadius:4,padding:'2px 8px'}}>
+                      <input className="inp inp-xs mono" style={{width:100,textAlign:'right',color:'#0f766e',fontWeight:800,border:'none',background:'transparent'}} placeholder="0" value={invGroupMinKg} onChange={e=>setInvGroupMinKg(e.target.value)} onBlur={e=>{const v=pn(e.target.value);setInvGroupMinKg(v>0?fv(v):'');}}/>
+                      <span style={{fontSize:'.62rem',color:'#0f766e',fontWeight:700}}>kg</span>
+                    </div>
+                    {invGroupMinKg&&<button className="btn btn-xs btn-ghost" style={{borderColor:'#5eead4',color:'#0f766e'}} onClick={()=>setInvGroupMinKg('')}>✕ Xóa lọc</button>}
+                    {excludePO&&poData.length>0&&<span style={{fontSize:'.62rem',color:'#7c3aed',fontWeight:700}}>· đã trừ PO</span>}
+                    <span style={{fontSize:'.66rem',color:'#475569',fontWeight:700,marginLeft:'auto'}}>{invSkuGrouped.length} SKU · tổng {fv(totNet)} kg</span>
+                  </div>
+                  <div style={{overflowX:'auto'}}>
+                    <table className="tbl" style={{background:bg2,borderRadius:8,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
+                      <thead>
+                        <tr>
+                          <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU (nhóm chính)</th>
+                          <th style={{width:75}}>Số dòng</th>
+                          <th style={{width:130}}>Tổng KL kg<div style={{fontSize:'.52rem',fontWeight:600,opacity:.85}}>🟢 kho · 🟡 đang về</div></th>
+                          <th style={{width:110}}>Giá vốn BQ đ/kg</th><th style={{width:130}}>Tổng Vốn VND</th>
+                          <th style={{width:90}}>MinStock</th>
+                        </tr>
+                        <tr style={{background:'#e2e8f0'}}>
+                          <td colSpan={3} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({invSkuGrouped.length} SKU){excludePO&&poData.length>0&&<span style={{color:'#7c3aed',marginLeft:4}}>· đã trừ PO</span>}</td>
+                          <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#0d9488',fontWeight:900,fontSize:'.82rem'}}>{fv(totNet)} kg</td>
+                          <td/>
+                          <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#1d4ed8',fontWeight:800,fontSize:'.8rem'}}>{fv(totVND)}</td>
+                          <td/>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invSkuGrouped.length===0?(<tr><td colSpan={7} style={{textAlign:'center',padding:20,color:'#94a3b8',fontWeight:600}}>Không có SKU nào đạt điều kiện lọc.</td></tr>):invSkuGrouped.map((g,i)=>{
+                          const over=g.maxStock!=null&&g.maxStock>0&&g.net>g.maxStock;
+                          return(
+                          <tr key={g.key} style={{background:over?'#faf5ff':i<3?'#fffbeb':''}}>
+                            <td style={{textAlign:'center',color:'#64748b',fontSize:'.75rem',fontWeight:700}} className="mono">{i+1}</td>
+                            <td style={{paddingLeft:8,minWidth:210,fontWeight:700}}>{g.label}</td>
+                            <td style={{textAlign:'center',color:'#64748b',fontSize:'.75rem'}} className="mono">{g.lines}</td>
+                            <td style={{textAlign:'right',paddingRight:9}}>
+                              <div className="mono" style={{color:'#0d9488',fontSize:'.85rem',fontWeight:900}}>{fv(g.net)}</div>
+                              <div style={{display:'flex',gap:6,justifyContent:'flex-end',marginTop:1,fontSize:'.6rem',fontWeight:700}}>
+                                <span style={{color:'#16a34a'}}>🟢 {fv(g.netStock)}</span>
+                                <span style={{color:'#d97706'}}>🟡 {fv(g.netTransit)}</span>
+                              </div>
+                              {g.poCut>0&&<div style={{fontSize:'.55rem',fontWeight:700,color:'#7c3aed',textAlign:'right'}}>📑 −{fv(g.poCut)} PO</div>}
+                            </td>
+                            <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#475569',fontWeight:700}}>{fv(g.avgCost)}</td>
+                            <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#1d4ed8',fontWeight:800}}>{fv(g.totalVND)}</td>
+                            <td className="mono" style={{textAlign:'center',color:'#7c3aed',fontWeight:700}}>{g.minStock>0?fv(g.minStock):'—'}{over&&<div style={{fontSize:'.55rem',color:'#9333ea',fontWeight:800}}>▲ quá max</div>}</td>
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                );
+              })()}
+              {!invGroupView&&(
               <table className="tbl" style={{background:bg2,borderRadius:8,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.1)'}}>
                 <thead>
                   <tr><th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th style={{width:90}}>Status</th><th style={{width:95}}>KL kg</th><th style={{width:105}}>Giá vốn đ/kg</th><th style={{width:115}}>Tổng Vốn VND</th><th style={{width:75}}>MinStock</th><th style={{width:115}}>Thiếu/Dư kg</th><th style={{width:100}}>Dự Kiến</th><th style={{width:28}}></th></tr>
@@ -3776,6 +3904,7 @@ URL.revokeObjectURL(url);
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           </div>
         )}
@@ -3787,6 +3916,8 @@ URL.revokeObjectURL(url);
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <div><h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📏 Min/Max Stock per SKU</h2><p style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginTop:3}}>Ô trống maxstockkg = không giới hạn (∞) · Đề xuất mua do TP Kinh doanh nhập trên GSheet</p></div>
                 <div style={{display:'flex',gap:8}}>
+                  {/* SỬA #6 (R6): Trừ TL có PO khỏi tồn hiện tại */}
+                  <button className={`btn btn-sm ${excludePOMs?'btn-purple':'btn-ghost'}`} onClick={()=>setExcludePOMs(v=>!v)} disabled={poData.length===0} title={poData.length===0?'Cần Sync PO trước (tab 📑 PO đã ký)':'Trừ trọng lượng PO chưa giao khỏi Tồn hiện tại'} style={{border:excludePOMs?undefined:'1px solid #c4b5fd',color:excludePOMs?undefined:'#6d28d9'}}>{excludePOMs?'✓ Đang trừ PO':'➖ Trừ TL có PO'}</button>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('ms')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync</button>
                   <button className="btn btn-ghost btn-sm" onClick={addMS}><Ic.Plus/> Thêm SKU</button>
                 </div>
@@ -3807,7 +3938,7 @@ URL.revokeObjectURL(url);
                     <th>#</th><th style={{textAlign:'left',paddingLeft:5}}>SKU</th><th>Min Stock kg</th><th>Max Stock kg</th><th>Tồn hiện tại kg<div style={{fontSize:'.52rem',fontWeight:600,opacity:.85}}>🟢 kho · 🟡 đang về</div></th><th>% đạt min</th><th>Thiếu / Dư kg</th><th style={{background:'#fffbeb',color:'#92400e'}}>🛒 Đề xuất mua</th><th style={{background:'#fffbeb',color:'#92400e'}}>Tuần đề xuất</th><th></th>
                   </tr>
                   <tr style={{background:'#e2e8f0'}}>
-                    <td colSpan={2} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredMs.length} dòng)</td>
+                    <td colSpan={2} style={{textAlign:'right',paddingRight:9,color:'#334155',fontSize:'.68rem',fontWeight:900}}>TỔNG ({filteredMs.length} dòng){excludePOMs&&poData.length>0&&<span style={{color:'#7c3aed',marginLeft:4}}>· đã trừ PO</span>}</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#7c3aed',fontWeight:800,fontSize:'.8rem'}}>{fv(filtMsTotalMin)} kg min</td>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,color:'#6d28d9',fontWeight:800,fontSize:'.8rem'}}>{filtMsTotalMax>0?fv(filtMsTotalMax)+' kg max':'—'}</td>
                     <td style={{textAlign:'right',paddingRight:9}}>
@@ -3816,15 +3947,22 @@ URL.revokeObjectURL(url);
                     </td>
                     <td/>
                     <td className="mono" style={{textAlign:'right',paddingRight:9,fontWeight:900,color:filtMsDelta>=0?'#15803d':'#b91c1c',fontSize:'.8rem'}}>{filtMsDelta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(filtMsDelta))} kg</td>
-                    <td colSpan={3}/>
+                    {/* SỬA #1 (R6): Tổng 🛒 Đề xuất mua */}
+                    <td style={{textAlign:'center',background:'#fef3c7'}}>{filtMsTotalBuyReq>0?<div><div className="mono" style={{fontSize:'.8rem',fontWeight:900,color:'#92400e'}}>🛒 {fv(filtMsTotalBuyReq)} kg</div><div style={{fontSize:'.55rem',fontWeight:700,color:'#b45309'}}>{filtMsBuyReqRows} mã</div></div>:<span style={{color:'#cbd5e1',fontSize:'.7rem'}}>—</span>}</td>
+                    <td colSpan={2}/>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredMs.map((r,i)=>{
                     const k=skuKey(r);const grp=groupBySku(inventory).find(g=>g.key===k);
-                    const qtyStock=grp?grp.inStock.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
-                    const qtyTransit=grp?grp.inTransit.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
-                    const curQty=qtyStock+qtyTransit;   // Tổng = kho + đang về (dùng so Min/Max)
+                    const grossStock=grp?grp.inStock.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
+                    const grossTransit=grp?grp.inTransit.reduce((s,x)=>s+(parseFloat(x.qtyKg)||0),0):0;
+                    // SỬA #6 (R6): trừ TL PO chưa giao (kho trước → đang về sau)
+                    const poRem=excludePOMs?((poByKey[skuKeyNorm(r)]||{}).remaining||0):0;
+                    const qtyStock=Math.max(grossStock-poRem,0);
+                    const qtyTransit=Math.max(grossTransit-Math.max(poRem-grossStock,0),0);
+                    const poCut=(grossStock+grossTransit)-(qtyStock+qtyTransit); // thực trừ
+                    const curQty=qtyStock+qtyTransit;   // Tổng = kho + đang về (đã trừ PO nếu bật)
                     const ratio=r.minStockKg>0?curQty/r.minStockKg:null;const mx=r.maxStockKg;
                     const isOver=mx!==null&&mx>0&&curQty>mx;const delta=r.minStockKg>0?curQty-r.minStockKg:null;
                     const hasReq=String(r.buyRequest||'').trim()!=='';
@@ -3840,6 +3978,7 @@ URL.revokeObjectURL(url);
                             <span style={{color:'#16a34a'}} title="Hàng thật trong kho (bán được ngay)">🟢 {fv(qtyStock)}</span>
                             <span style={{color:'#d97706'}} title="Hàng đã mua đang trên đường về">🟡 {fv(qtyTransit)}</span>
                           </div>
+                          {poCut>0&&<div style={{fontSize:'.55rem',fontWeight:700,color:'#7c3aed',textAlign:'right'}} title="Đã trừ PO chưa giao">📑 −{fv(poCut)} PO</div>}
                         </td>
                         <td style={{textAlign:'center',width:90}}>{ratio!==null?(<div><div className="stock-bar" style={{height:5,margin:'0 8px 2px'}}><div className="stock-bar-fill" style={{width:`${Math.min((ratio/2.5)*100,100)}%`,background:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}/></div><span className="mono" style={{fontSize:'.72rem',fontWeight:800,color:isOver?'#6d28d9':ratio<0.8?'#dc2626':ratio<1?'#d97706':ratio>2?'#4f46e5':'#16a34a'}}>{Math.round(ratio*100)}%</span></div>):<span style={{color:'#64748b'}}>—</span>}</td>
                         <td style={{textAlign:'right',paddingRight:9,width:155}}>{isOver?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:'#6d28d9'}}>▲ quá max +{fv(curQty-mx)} kg</span>):delta!=null?(<span className="mono" style={{fontSize:'.78rem',fontWeight:800,color:delta>=0?'#15803d':'#b91c1c'}}>{delta>=0?'▲ dư +':'▼ thiếu '}{fv(Math.abs(delta))} kg</span>):<span style={{color:'#64748b'}}>—</span>}</td>
@@ -5627,7 +5766,7 @@ URL.revokeObjectURL(url);
                       <div style={{fontWeight:800,fontSize:'.82rem',color:'#0f172a'}}>{d.label}</div>
                       <div style={{fontSize:'.66rem',color:'#475569',fontWeight:600,marginTop:2}}>{d.savedAt?new Date(d.savedAt).toLocaleString('vi-VN'):''} · {d.snapshot?fv(d.snapshot.totalKg)+'kg · '+fv((d.snapshot.totalVND||0)/1e6)+'tr':''}</div>
                     </div>
-                    <button className="btn btn-purple btn-xs" onClick={()=>{if(d.inputs)setInputs(d.inputs);if(d.products)setProducts(d.products);setDraftModalOpen(false);setTab('main');alert('✓ Đã tải nháp "'+d.label+'" vào màn hình.');}} style={{fontSize:'.65rem'}}>⬇ Tải</button>
+                    <button className="btn btn-purple btn-xs" onClick={()=>{if(d.inputs)setInputs(d.inputs);if(d.products)setProducts(d.products);if(Array.isArray(d.sellingPrices)&&d.sellingPrices.length>0)setSP(d.sellingPrices);setDraftModalOpen(false);setTab('main');alert('✓ Đã tải nháp "'+d.label+'" vào màn hình.');}} style={{fontSize:'.65rem'}}>⬇ Tải</button>
                     <button className="btn-danger" onClick={()=>{const next=localDrafts.filter(x=>x.id!==d.id);setLocalDrafts(next);try{localStorage.setItem('pakd_local_drafts',JSON.stringify(next));}catch(e){}}} title="Xóa nháp này"><Ic.X/></button>
                   </div>
                 ))}
