@@ -1,7 +1,7 @@
 import React from 'react';
 const {useState,useEffect,useRef,useMemo,useCallback,Component}=React;
 import Chart from 'chart.js/auto';
-import {ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcLimitsWarnings,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
+import {ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
 import {getCurrentWeekLabel,matchWeekLabel,parseCashFlowCSV} from './lib/cashflow';
 import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
 import {CashFlowTab} from './components/CashFlowTab';
@@ -1351,7 +1351,6 @@ const App=()=>{
   // Sync resultRef cho callbacks GitHub không vi phạm TDZ
   useEffect(()=>{resultRef.current=result;},[result]);
 
-  const limitsWarnings=useMemo(()=>calcLimitsWarnings(limitsData,inventory),[limitsData,inventory]);
 
   // ── PO đã ký: gom tổng "chưa giao" theo SKU key chuẩn hóa ──
   const poByKey=useMemo(()=>{
@@ -2212,7 +2211,6 @@ URL.revokeObjectURL(url);
           {result&&<span className={`tag ${result.rec.cls}`}>{result.rec.txt}</span>}
           {result&&<span className={`tag ${result.containerOk?'tg':result.totalContainer<24?'tr':'ty'}`}>📦 {result.totalContainer.toFixed(1)}T</span>}
           {result&&result.hasLowStock&&<span className="tag tr pulse"><Ic.Alert/> Thiếu hàng</span>}
-          {limitsWarnings.totalAlerts>0&&<span className="tag tr pulse"><Ic.Alert/> {limitsWarnings.totalAlerts} CB</span>}
           <button className="btn btn-success btn-sm" onClick={saveScenario}><Ic.Save/> Lưu</button>
           {/* Cấu hình GitHub chung — dùng cho mọi tính năng cloud (PA, Giá sàn, ...) */}
           <button className="btn btn-ghost btn-sm" onClick={()=>setGhStatus(p=>({...p,configOpen:true}))} title={ghVerified?`✓ GitHub: ${ghUser?.login||'?'} — Click để chỉnh cấu hình`:'Cấu hình kết nối GitHub'} style={{padding:'4px 9px',fontSize:'.72rem',background:ghVerified?'#dcfce7':'#fee2e2',border:`1px solid ${ghVerified?'#86efac':'#fca5a5'}`,color:ghVerified?'#14532d':'#991b1b'}}>
