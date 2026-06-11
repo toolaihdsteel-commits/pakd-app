@@ -693,12 +693,7 @@ const App=()=>{
   },[]);
   // Khi mở bảng GĐ và đã xác thực: tải người duyệt + danh sách PA (silent — không bật modal desktop)
   const ceoLoadedRef=useRef(false);
-  useEffect(()=>{
-    if(ceoView&&ghVerified&&!ceoLoadedRef.current){
-      ceoLoadedRef.current=true;
-      (async()=>{try{await loadApprovers();await listPAsFromGithub(true);}catch(e){console.warn('CEO load:',e.message);}})();
-    }
-  },[ceoView,ghVerified,loadApprovers,listPAsFromGithub]);
+  // (effect tải dữ liệu bảng GĐ được chuyển xuống SAU listFloorSubmissions — tránh TDZ)
   // Tồn kho tổng hợp + đếm SKU dưới Min cho bảng GĐ
   const ceoInv=useMemo(()=>{
     let stockKg=0,transitKg=0;
@@ -928,7 +923,7 @@ const App=()=>{
   },[ghAPI,inputs,ghConfig.branch,approvers,loadApprovers,askPin,excludePOFloor,mgmtFloorOverride,pushFloorHistoryToSheet]);
 
   // Tải danh sách Sàn pending + approved (Giám đốc xem)
-  const listFloorSubmissions=useCallback(async()=>{
+  const listFloorSubmissions=useCallback(async(silent)=>{
     setFloorStatus(p=>({...p,loading:true,error:null}));
     try{
       // pending
@@ -953,12 +948,20 @@ const App=()=>{
         }catch(e){return{...f,_data:null};}
       }));
       const [pMeta,aMeta]=await Promise.all([fetchMeta(pendingFiles,'pending'),fetchMeta(approvedFiles,'approved')]);
-      setFloorStatus(p=>({...p,loading:false,pendingList:pMeta,approvedList:aMeta,viewOpen:true,activeTab:'pending',selectedFile:null,selectedData:null}));
+      setFloorStatus(p=>({...p,loading:false,pendingList:pMeta,approvedList:aMeta,viewOpen:silent===true?p.viewOpen:true,activeTab:'pending',selectedFile:null,selectedData:null}));
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi tải danh sách Sàn:\n${e.message}`);
     }
   },[ghAPI]);
+
+  // GĐ3b: khi mở bảng GĐ và đã xác thực → tải người duyệt + PA + Sàn chờ ký (silent)
+  useEffect(()=>{
+    if(ceoView&&ghVerified&&!ceoLoadedRef.current){
+      ceoLoadedRef.current=true;
+      (async()=>{try{await loadApprovers();await listPAsFromGithub(true);await listFloorSubmissions(true);}catch(e){console.warn('CEO load:',e.message);}})();
+    }
+  },[ceoView,ghVerified,loadApprovers,listPAsFromGithub,listFloorSubmissions]);
 
   // SỬA #1 (R4): XÓA 1 PA MUA trên GitHub — cần PIN QUẢN TRỊ / Giám đốc.
   const deletePAFromGithub=useCallback(async(file)=>{
@@ -1452,6 +1455,32 @@ const App=()=>{
     if(!me) return;
     const res=await gasCall('markBuyReqDone',{alloy:r.alloy,temper:r.temper,thickness:r.thickness,width:r.width,length:r.length,coating:r.coating},me.name);
     if(res){alert(`✓ ${res.msg}\nNgười xử lý: ${me.name} (đã lưu vết).`);syncGoogleSheet('ms');}
+  },[identifyByPin,gasCall,syncGoogleSheet]);
+  // ── R7: Phòng mua NHẬP GIÁ CIF MỚI cho 1 nhóm hàng → thêm dòng mới vào sheet UpdatedImportPrice ──
+  const handleAddImportPrice=useCallback(async(g)=>{
+    const raw=window.prompt(`💲 NHẬP GIÁ CIF MỚI — ${g.label}\n${g.alloy}${g.temper?' '+g.temper:''} · ${g.minThick}–${g.maxThick} mm\n\nGiá CIF chào (USD/tấn):`,'');
+    if(raw===null) return;
+    const price=pn(raw);
+    if(!price||price<=0){alert('❌ Giá không hợp lệ');return;}
+    const note=window.prompt('Ghi chú (CIF cảng nào, NCC...):','CIF HPH');
+    if(note===null) return;
+    const me=await identifyByPin('🔐 Nhập PIN để ghi giá CIF mới lên GSheet (định danh + lưu vết):');
+    if(!me) return;
+    const res=await gasCall('addImportPrice',{alloy:g.alloy,temper:g.temper||'',minThick:g.minThick,maxThick:g.maxThick,priceFC:price,note:(note||'').trim()},me.name);
+    if(res){alert(`✓ ${res.msg}\nNgười nhập: ${me.name} (đã lưu vết).`);syncGoogleSheet('uip');}
+  },[identifyByPin,gasCall,syncGoogleSheet]);
+  // ── R7: TP Kinh doanh nhập GIÁ ĐỐI THỦ vào dòng CIF MỚI NHẤT của nhóm ──
+  const handleSetCompetitorPrice=useCallback(async(g)=>{
+    const cp=window.prompt(`🏷 GIÁ ĐỐI THỦ — ${g.label}\n(Ghi vào dòng giá CIF MỚI NHẤT của nhóm này)\n\nCompetitorPrice — giá bán đối thủ (đ/kg):`,g.avgCompPrice>0?String(Math.round(g.avgCompPrice)):'');
+    if(cp===null) return;
+    const cf=window.prompt('CompetitorFloorPrice — giá sàn đối thủ (đ/kg):',g.avgCompFloor>0?String(Math.round(g.avgCompFloor)):'');
+    if(cf===null) return;
+    const vp=pn(cp),vf=pn(cf);
+    if((!vp||vp<=0)&&(!vf||vf<=0)){alert('❌ Cần nhập ít nhất 1 giá hợp lệ');return;}
+    const me=await identifyByPin('🔐 Nhập PIN để ghi giá đối thủ lên GSheet:');
+    if(!me) return;
+    const res=await gasCall('setCompetitorPrice',{alloy:g.alloy,temper:g.temper||'',minThick:g.minThick,maxThick:g.maxThick,competitorPrice:vp>0?vp:null,competitorFloorPrice:vf>0?vf:null},me.name);
+    if(res){alert(`✓ ${res.msg}\nNgười nhập: ${me.name} (đã lưu vết).`);syncGoogleSheet('uip');}
   },[identifyByPin,gasCall,syncGoogleSheet]);
   // ── R4: TP Kinh doanh (hoặc người liên quan) ĐỀ XUẤT MUA ngay trong app → ghi cột yeucaumua + tuanyeucau trên GSheet ──
   const handleSetBuyRequest=useCallback(async(r)=>{
@@ -2000,7 +2029,7 @@ URL.revokeObjectURL(url);
                 <div style={{color:'#94a3b8',fontSize:'.68rem',fontWeight:700}}>{new Date().toLocaleDateString('vi-VN',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'})}{dbStatus.lastSync?` · dữ liệu ${dbStatus.lastSync}`:''}</div>
               </div>
               <div style={{display:'flex',gap:6}}>
-                <button onClick={async()=>{ceoLoadedRef.current=false;syncGoogleSheet('all');try{await listPAsFromGithub(true);}catch(e){}ceoLoadedRef.current=true;}} disabled={dbStatus.loading||ghStatus.loading} style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #334155',borderRadius:8,padding:'8px 12px',fontWeight:800,fontSize:'.72rem',cursor:'pointer'}}>{(dbStatus.loading||ghStatus.loading)?'⏳':'🔄'} Làm mới</button>
+                <button onClick={async()=>{ceoLoadedRef.current=false;syncGoogleSheet('all');try{await listPAsFromGithub(true);await listFloorSubmissions(true);}catch(e){}ceoLoadedRef.current=true;}} disabled={dbStatus.loading||ghStatus.loading} style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #334155',borderRadius:8,padding:'8px 12px',fontWeight:800,fontSize:'.72rem',cursor:'pointer'}}>{(dbStatus.loading||ghStatus.loading)?'⏳':'🔄'} Làm mới</button>
                 <button onClick={()=>{location.hash='';}} style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #334155',borderRadius:8,padding:'8px 12px',fontWeight:800,fontSize:'.72rem',cursor:'pointer'}}>🖥 Bản đầy đủ</button>
               </div>
             </div>
@@ -2159,7 +2188,58 @@ URL.revokeObjectURL(url);
                 </div>
               ))}
             </div>
-            <div style={{textAlign:'center',marginTop:14,fontSize:'.62rem',color:'#475569',fontWeight:600}}>PAKD BUY 8.0 · Bảng Giám đốc · Ký PA cần PIN — có lưu vết</div>
+            {/* SÀN CHỜ KÝ */}
+            <div style={{background:'#fff',borderRadius:12,padding:'13px 15px',marginTop:10}}>
+              <div style={{fontSize:'.66rem',fontWeight:900,color:'#64748b',marginBottom:7}}>💹 GIÁ SÀN CHỜ KÝ ({(floorStatus.pendingList||[]).length})</div>
+              {floorStatus.loading&&<div style={{color:'#64748b',fontSize:'.72rem',fontWeight:700,padding:'4px 0'}}>⏳ Đang tải...</div>}
+              {!floorStatus.loading&&(floorStatus.pendingList||[]).length===0&&<div style={{color:'#15803d',fontWeight:800,fontSize:'.78rem',padding:'4px 0'}}>✅ Không có bản Sàn nào chờ ký.</div>}
+              {(floorStatus.pendingList||[]).map((f,i)=>{
+                const fd=f._data||{};
+                const acts=Array.isArray(fd.approvals)?fd.approvals:[];
+                const prog=approvalProgress(approvers,acts,'floor');
+                return (
+                  <div key={f.name} style={{borderTop:i>0?'1px solid #e2e8f0':'none',padding:'9px 0'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                      <div style={{minWidth:0,cursor:'pointer'}} onClick={()=>setCeoOpen(p=>({...p,['fl:'+f.name]:!p['fl:'+f.name]}))}>
+                        <div style={{fontWeight:900,fontSize:'.78rem',color:'#0f172a'}}>💹 Sàn {fd.weekLabel||f.name.replace('.json','')}</div>
+                        <div style={{fontSize:'.64rem',fontWeight:700,color:'#64748b'}}>Trình: {fd.requestedBy||'?'} · {(fd.groups||[]).length||fd.groupsCount||0} nhóm hàng{fd.exchangeRate?` · tỷ giá ${fv(fd.exchangeRate)}`:''}</div>
+                        {fd.requestNote&&<div style={{fontSize:'.62rem',color:'#475569',fontStyle:'italic',marginTop:1}}>📝 {fd.requestNote}</div>}
+                      </div>
+                      <div style={{display:'flex',gap:5,flexShrink:0}}>
+                        {(()=>{
+                          if(approvers.length===0||prog.empty) return <span style={{fontSize:'.6rem',color:'#b45309',fontWeight:700}}>⚠ Chưa đặt bước</span>;
+                          if(prog.rejected) return <span style={{fontSize:'.62rem',color:'#991b1b',fontWeight:800}}>Đã bác</span>;
+                          if(prog.done) return <span style={{fontSize:'.62rem',color:'#14532d',fontWeight:800}}>✓ Đủ cấp</span>;
+                          return (
+                            <>
+                              <button onClick={async()=>{await reviewFloorSubmission(f,'pending','approved');try{await listFloorSubmissions(true);}catch(e){}}} disabled={floorStatus.loading} style={{background:'#16a34a',color:'#fff',border:'none',borderRadius:8,padding:'9px 14px',fontWeight:900,fontSize:'.74rem',cursor:'pointer'}}>✍ Ký</button>
+                              <button onClick={async()=>{await reviewFloorSubmission(f,'pending','rejected');try{await listFloorSubmissions(true);}catch(e){}}} disabled={floorStatus.loading} style={{background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',borderRadius:8,padding:'9px 10px',fontWeight:900,fontSize:'.74rem',cursor:'pointer'}}>✗</button>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                    <div style={{fontSize:'.6rem',color:'#94a3b8',fontWeight:700,marginTop:3}}>
+                      {acts.map(a=>`✓ ${a.name} (b${a.step})`).join(' → ')||'Chưa ai ký'}{ceoOpen['fl:'+f.name]?' ▲':' · bấm tên xem giá ▼'}
+                    </div>
+                    {ceoOpen['fl:'+f.name]&&(fd.groups||[]).length>0&&(
+                      <table style={{width:'100%',marginTop:5,fontSize:'.62rem',fontWeight:700,borderCollapse:'collapse',background:'#f8fafc',borderRadius:7}}>
+                        <thead><tr style={{color:'#94a3b8',textAlign:'right'}}><td style={{textAlign:'left',padding:'3px 6px'}}>NHÓM ({fd.groups.length})</td><td>BQ GV</td><td>Sàn ban hành</td><td>A Group</td></tr></thead>
+                        <tbody>{fd.groups.map((g,k)=>(
+                          <tr key={k} style={{borderTop:'1px solid #e2e8f0',textAlign:'right'}}>
+                            <td style={{textAlign:'left',padding:'3px 6px',fontWeight:800,color:'#0f172a'}}>{g.label}</td>
+                            <td className="mono">{fv(g.avgCost)}</td>
+                            <td className="mono" style={{fontWeight:900,color:'#0d9488'}}>{fv(g.publishedFloor)}</td>
+                            <td className="mono">{g.corePrice?fv(g.corePrice):'—'}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{textAlign:'center',marginTop:14,fontSize:'.62rem',color:'#475569',fontWeight:600}}>PAKD BUY 8.0 · Bảng Giám đốc · Ký PA/Sàn cần PIN — có lưu vết</div>
           </div>
         </div>
       )}
@@ -3296,6 +3376,12 @@ URL.revokeObjectURL(url);
                               <div style={{fontSize:'.62rem',color:'#475569',fontWeight:600,marginTop:2}}>
                                 {g.alloy}{g.temper?` ${g.temper}`:''} · {g.minThick}–{g.maxThick} mm
                               </div>
+                              {gasConfig.url&&(
+                                <div style={{display:'flex',gap:4,marginTop:3}}>
+                                  <button onClick={()=>handleAddImportPrice(g)} title="Phòng mua: nhập giá CIF chào MỚI cho nhóm này — thêm dòng mới vào sheet Giá nhập cập nhật (cần PIN, lưu vết)" style={{border:'1px solid #2563eb',background:'#eff6ff',color:'#1d4ed8',borderRadius:4,cursor:'pointer',fontSize:'.6rem',fontWeight:800,padding:'1px 6px'}}>💲 CIF mới</button>
+                                  <button onClick={()=>handleSetCompetitorPrice(g)} title="TP Kinh doanh: nhập giá bán + giá sàn ĐỐI THỦ vào dòng CIF mới nhất của nhóm (cần PIN, lưu vết)" style={{border:'1px solid #d97706',background:'#fffbeb',color:'#b45309',borderRadius:4,cursor:'pointer',fontSize:'.6rem',fontWeight:800,padding:'1px 6px'}}>🏷 Giá ĐT</button>
+                                </div>
+                              )}
                             </td>
                             <td style={{textAlign:'center'}}>
                               {/* III.3: Click SKU count to expand/collapse */}
