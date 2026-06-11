@@ -1456,23 +1456,61 @@ const App=()=>{
     const res=await gasCall('markBuyReqDone',{alloy:r.alloy,temper:r.temper,thickness:r.thickness,width:r.width,length:r.length,coating:r.coating},me.name);
     if(res){alert(`✓ ${res.msg}\nNgười xử lý: ${me.name} (đã lưu vết).`);syncGoogleSheet('ms');}
   },[identifyByPin,gasCall,syncGoogleSheet]);
-  // ── R8: THÊM PO MỚI 2 chiều — form modal, PIN + lưu vết, chặn trùng PO+SKU ──
-  const [poForm,setPoForm]=useState({open:false,po:'',supplier:'',poDate:new Date().toLocaleDateString('vi-VN'),alloy:'A1050',temper:'H14',thickness:'1.0',width:'1200',length:'C',coating:'KP',ordered:'',price:''});
+  // ── R9: PO 2 chiều ĐẦY ĐỦ — thêm PO nhiều dòng hàng / thêm hàng vào PO sẵn / sửa / xóa dòng / xóa cả PO ──
+  const emptyPOItem=()=>({alloy:'A1050',temper:'H14',thickness:'1.0',width:'1200',length:'C',coating:'KP',ordered:'',price:''});
+  const [poForm,setPoForm]=useState({open:false,lockHeader:false,po:'',supplier:'',poDate:new Date().toLocaleDateString('vi-VN'),items:[emptyPOItem()]});
+  const openNewPO=()=>setPoForm({open:true,lockHeader:false,po:'',supplier:'',poDate:new Date().toLocaleDateString('vi-VN'),items:[emptyPOItem()]});
+  const openAppendPO=(po,supplier,poDate)=>setPoForm({open:true,lockHeader:true,po,supplier,poDate:poDate||new Date().toLocaleDateString('vi-VN'),items:[emptyPOItem()]});
   const submitAddPO=useCallback(async()=>{
     const f=poForm;
     if(!f.po.trim()||!f.supplier.trim()){alert('❌ Cần nhập Số PO và Khách hàng');return;}
-    const ordered=pn(f.ordered);
-    if(!ordered||ordered<=0){alert('❌ TL đặt (kg) không hợp lệ');return;}
-    const price=pn(f.price)||0;
-    const me=await identifyByPin('🔐 Nhập PIN để THÊM PO vào GSheet (định danh + lưu vết):');
+    const items=[];
+    for(let i=0;i<f.items.length;i++){
+      const it=f.items[i];
+      const ordered=pn(it.ordered);
+      if(!ordered||ordered<=0){alert(`❌ Dòng ${i+1}: TL đặt (kg) không hợp lệ`);return;}
+      items.push({alloy:it.alloy,temper:it.temper,thickness:it.thickness,width:it.width,length:it.length,coating:it.coating,ordered,price:pn(it.price)||0});
+    }
+    if(items.length===0){alert('❌ Chưa có dòng hàng nào');return;}
+    const me=await identifyByPin(`🔐 Nhập PIN để ghi ${items.length} dòng PO vào GSheet (định danh + lưu vết):`);
     if(!me) return;
-    const res=await gasCall('addPORow',{po:f.po.trim(),supplier:f.supplier.trim(),poDate:f.poDate,alloy:f.alloy,temper:f.temper,thickness:f.thickness,width:f.width,length:f.length,coating:f.coating,ordered,price},me.name);
+    const res=await gasCall('addPORows',{po:f.po.trim(),supplier:f.supplier.trim(),poDate:f.poDate,items},me.name);
     if(res){
-      alert(`✓ ${res.msg}\nNgười nhập: ${me.name} (đã lưu vết).\n\nForm giữ nguyên Số PO + Khách hàng — nhập tiếp SKU khác cùng PO hoặc bấm Đóng.`);
-      setPoForm(p=>({...p,ordered:'',price:''}));
+      alert(`✓ ${res.msg}\nNgười nhập: ${me.name} (đã lưu vết).`);
+      setPoForm(p=>({...p,open:false}));
       syncGoogleSheet('po');
     }
   },[poForm,identifyByPin,gasCall,syncGoogleSheet]);
+  // Sửa TL đặt + đơn giá của 1 dòng PO (SKU giữ nguyên — đổi SKU thì xóa dòng rồi thêm mới)
+  const handleEditPORow=useCallback(async(p)=>{
+    const rawOrd=window.prompt(`🛠 SỬA DÒNG PO ${p.po} — ${skuLabel(p)}\nĐã giao: ${fv(p.delivered)} kg\n\nTL ĐẶT mới (kg):`,String(p.ordered||''));
+    if(rawOrd===null) return;
+    const ordered=pn(rawOrd);
+    if(!ordered||ordered<=0){alert('❌ TL đặt không hợp lệ');return;}
+    if(ordered<(p.delivered||0)){alert(`❌ TL đặt (${fv(ordered)}) nhỏ hơn TL ĐÃ GIAO (${fv(p.delivered)})`);return;}
+    const rawPr=window.prompt('Đơn giá bán KH mới (đ/kg) — Enter giữ nguyên:',String(p.price||''));
+    if(rawPr===null) return;
+    const me=await identifyByPin('🔐 Nhập PIN để SỬA dòng PO (định danh + lưu vết):');
+    if(!me) return;
+    const res=await gasCall('updatePORow',{po:p.po,alloy:p.alloy,temper:p.temper,thickness:p.thickness,width:p.width,length:p.length,coating:p.coating,ordered,price:pn(rawPr)||0},me.name);
+    if(res){alert(`✓ ${res.msg}\nNgười sửa: ${me.name} (đã lưu vết).`);syncGoogleSheet('po');}
+  },[identifyByPin,gasCall,syncGoogleSheet]);
+  // Xóa 1 dòng PO
+  const handleDeletePORow=useCallback(async(p)=>{
+    if(!window.confirm(`🗑 XÓA dòng PO?\nPO ${p.po} — ${skuLabel(p)}\nTL đặt ${fv(p.ordered)} kg · đã giao ${fv(p.delivered)} kg\n\nGiá trị cũ vẫn lưu trong AUDIT_LOG.`)) return;
+    const me=await identifyByPin('🔐 Nhập PIN để XÓA dòng PO:');
+    if(!me) return;
+    const res=await gasCall('deletePORow',{po:p.po,alloy:p.alloy,temper:p.temper,thickness:p.thickness,width:p.width,length:p.length,coating:p.coating},me.name);
+    if(res){alert(`✓ ${res.msg}\nNgười xóa: ${me.name} (đã lưu vết).`);syncGoogleSheet('po');}
+  },[identifyByPin,gasCall,syncGoogleSheet]);
+  // Xóa CẢ PO (mọi dòng hàng)
+  const handleDeletePO=useCallback(async(po,nRows)=>{
+    if(!window.confirm(`🗑 XÓA TOÀN BỘ PO ${po} (${nRows} dòng hàng)?\n\nKhông thể hoàn tác trên sheet — giá trị cũ lưu trong AUDIT_LOG.`)) return;
+    const me=await identifyByPin('🔐 Nhập PIN để XÓA CẢ PO:');
+    if(!me) return;
+    const res=await gasCall('deletePO',{po},me.name);
+    if(res){alert(`✓ ${res.msg}\nNgười xóa: ${me.name} (đã lưu vết).`);syncGoogleSheet('po');}
+  },[identifyByPin,gasCall,syncGoogleSheet]);
   // ── R8: tự Sync All lại khi dữ liệu cũ quá 20 phút (kiểm tra mỗi phút + khi quay lại tab) ──
   const lastSyncAtRef=useRef(null);
   useEffect(()=>{lastSyncAtRef.current=dbStatus.lastSyncAt||null;},[dbStatus.lastSyncAt]);
@@ -3990,7 +4028,7 @@ URL.revokeObjectURL(url);
                 <div style={{display:'flex',gap:8,alignItems:'center'}}>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('po')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync PO</button>
                   <button className="btn btn-purple btn-sm" onClick={createPAFromShortPO} disabled={poData.length===0} title="Gộp các SKU 'Cần đặt thêm' (kho + đang về không đủ giao PO) thành danh sách SKU bên tab PAKD Mua">🛒 Tạo PA Mua từ SKU thiếu</button>
-                  {gasConfig.url&&<button className="btn btn-success btn-sm" onClick={()=>setPoForm(p=>({...p,open:true}))} title="Thêm dòng PO mới vào GSheet (cần PIN, lưu vết AUDIT_LOG)">➕ Thêm PO</button>}
+                  {gasConfig.url&&<button className="btn btn-success btn-sm" onClick={openNewPO} title="Thêm PO mới (nhiều dòng hàng) vào GSheet — cần PIN, lưu vết AUDIT_LOG">➕ Thêm PO</button>}
                   {poData.length===0?<span className="tag tr pulse">⚠ Chưa có dữ liệu – nhấn Sync</span>:<span className="tag tg">✓ {poData.length} dòng PO</span>}
                 </div>
               </div>
@@ -4034,7 +4072,11 @@ URL.revokeObjectURL(url);
                       <div key={po} className="card" style={{marginBottom:10,padding:0,overflow:'hidden'}}>
                         <div style={{background:'#eff6ff',borderBottom:'1px solid #bfdbfe',padding:'7px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                           <div style={{fontWeight:900,fontSize:'.84rem',color:'#1e40af'}}>📄 {po} <span style={{fontSize:'.66rem',fontWeight:700,color:'#475569'}}>· {items[0].supplier}{items[0].poDate?` · ${items[0].poDate}`:''}</span></div>
+                          <div style={{display:'flex',gap:6,alignItems:'center'}}>
                           <span className="tag tb" style={{fontSize:'.66rem'}}>{items.length} SKU · còn thiếu {fv(items.reduce((s,p)=>s+p.remaining,0))} kg</span>
+                          {gasConfig.url&&<button onClick={()=>openAppendPO(po,items[0].supplier,items[0].poDate)} title="Thêm dòng hàng vào PO này (cần PIN, lưu vết)" style={{border:'1px solid #16a34a',background:'#f0fdf4',color:'#15803d',borderRadius:5,cursor:'pointer',fontSize:'.64rem',fontWeight:800,padding:'2px 8px'}}>➕ Thêm hàng</button>}
+                          {gasConfig.url&&<button onClick={()=>handleDeletePO(po,items.length)} title="Xóa TOÀN BỘ PO này khỏi GSheet (cần PIN, lưu vết)" style={{border:'1px solid #fca5a5',background:'#fef2f2',color:'#b91c1c',borderRadius:5,cursor:'pointer',fontSize:'.64rem',fontWeight:800,padding:'2px 8px'}}>🗑 Xóa PO</button>}
+                        </div>
                         </div>
                         <table className="tbl" style={{fontSize:'.72rem'}}>
                           <thead><tr>
@@ -4043,7 +4085,12 @@ URL.revokeObjectURL(url);
                           <tbody>
                             {items.map((p,i)=>(
                               <tr key={i} style={p.needBuy>0?{background:'#fff7ed'}:{}}>
-                                <td style={{textAlign:'left'}}><SkuLabelCell row={p}/></td>
+                                <td style={{textAlign:'left'}}><SkuLabelCell row={p}/>{gasConfig.url&&(
+                                  <div style={{display:'flex',gap:4,marginTop:2}}>
+                                    <button onClick={()=>handleEditPORow(p)} title="Sửa TL đặt + đơn giá dòng này (cần PIN, lưu vết)" style={{border:'1px solid #2563eb',background:'#eff6ff',color:'#1d4ed8',borderRadius:4,cursor:'pointer',fontSize:'.58rem',fontWeight:800,padding:'0 5px'}}>🛠 Sửa</button>
+                                    <button onClick={()=>handleDeletePORow(p)} title="Xóa dòng này khỏi PO (cần PIN, lưu vết)" style={{border:'1px solid #fca5a5',background:'#fef2f2',color:'#b91c1c',borderRadius:4,cursor:'pointer',fontSize:'.58rem',fontWeight:800,padding:'0 5px'}}>🗑</button>
+                                  </div>
+                                )}</td>
                                 {/* SỬA #2 (R7): Đơn giá bán cho khách (cột Đơn giá trong sheet PO) */}
                                 <td className="mono" style={{textAlign:'right',fontWeight:900,color:p.price>0?'#047857':'#cbd5e1',background:'#f0fdf4'}}>{p.price>0?fv(p.price):'—'}</td>
                                 <td className="mono" style={{textAlign:'right'}}>{fv(p.ordered)}</td>
@@ -4296,29 +4343,41 @@ URL.revokeObjectURL(url);
       )}
 
       {/* MODAL: GITHUB CONFIG */}
-      {/* R8: MODAL THÊM PO MỚI */}
+      {/* R9: MODAL THÊM PO / THÊM HÀNG VÀO PO SẴN — nhiều dòng hàng, 1 lần PIN */}
       {poForm.open&&(
         <div onClick={()=>setPoForm(p=>({...p,open:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'20px 24px',maxWidth:520,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'20px 24px',maxWidth:680,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,borderBottom:'2px solid #e2e8f0',paddingBottom:8}}>
-              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>➕ Thêm PO mới <span style={{fontSize:'.62rem',fontWeight:700,color:'#64748b'}}>(ghi thẳng GSheet · cần PIN · lưu vết)</span></h3>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>{poForm.lockHeader?`➕ Thêm hàng vào PO ${poForm.po}`:'➕ Thêm PO mới'} <span style={{fontSize:'.62rem',fontWeight:700,color:'#64748b'}}>(ghi thẳng GSheet · 1 lần PIN cho cả PO · lưu vết)</span></h3>
               <button onClick={()=>setPoForm(p=>({...p,open:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:9}}>
               <div style={{display:'flex',gap:8}}>
-                <div style={{flex:1}}><label className="lbl">Số PO *</label><input className="inp" value={poForm.po} onChange={e=>setPoForm(p=>({...p,po:e.target.value}))} placeholder="vd: PO-2026-068"/></div>
-                <div style={{flex:1}}><label className="lbl">Khách hàng *</label><input className="inp" value={poForm.supplier} onChange={e=>setPoForm(p=>({...p,supplier:e.target.value}))} placeholder="vd: THACO"/></div>
+                <div style={{flex:1}}><label className="lbl">Số PO *</label><input className="inp" value={poForm.po} disabled={poForm.lockHeader} onChange={e=>setPoForm(p=>({...p,po:e.target.value}))} placeholder="vd: PO-2026-068" style={poForm.lockHeader?{background:'#f1f5f9'}:{}}/></div>
+                <div style={{flex:1}}><label className="lbl">Khách hàng *</label><input className="inp" value={poForm.supplier} disabled={poForm.lockHeader} onChange={e=>setPoForm(p=>({...p,supplier:e.target.value}))} placeholder="vd: THACO" style={poForm.lockHeader?{background:'#f1f5f9'}:{}}/></div>
                 <div style={{width:110}}><label className="lbl">Ngày PO</label><input className="inp" value={poForm.poDate} onChange={e=>setPoForm(p=>({...p,poDate:e.target.value}))} placeholder="dd/mm/yyyy"/></div>
               </div>
-              <div><label className="lbl">Quy cách SKU</label><SkuSel row={poForm} onChange={patch=>setPoForm(p=>({...p,...patch}))}/></div>
-              <div style={{display:'flex',gap:8}}>
-                <div style={{flex:1}}><label className="lbl">TL đặt (kg) *</label><input className="inp mono" value={poForm.ordered} onChange={e=>setPoForm(p=>({...p,ordered:e.target.value}))} placeholder="vd: 10000"/></div>
-                <div style={{flex:1}}><label className="lbl">Đơn giá bán KH (đ/kg)</label><input className="inp mono" value={poForm.price} onChange={e=>setPoForm(p=>({...p,price:e.target.value}))} placeholder="vd: 102000"/></div>
+              <div>
+                <label className="lbl">Các dòng hàng ({poForm.items.length})</label>
+                {poForm.items.map((it,idx)=>(
+                  <div key={idx} style={{border:'1px solid #e2e8f0',borderRadius:7,padding:'8px 10px',marginBottom:6,background:idx%2?'#f8fafc':'#fff'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                      <span style={{fontSize:'.66rem',fontWeight:900,color:'#475569'}}>Dòng {idx+1}</span>
+                      {poForm.items.length>1&&<button onClick={()=>setPoForm(p=>({...p,items:p.items.filter((_,i)=>i!==idx)}))} style={{background:'none',border:'none',color:'#dc2626',cursor:'pointer',fontWeight:800,fontSize:'.7rem'}}>✕ bỏ dòng</button>}
+                    </div>
+                    <SkuSel row={it} onChange={patch=>setPoForm(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,...patch}:x)}))}/>
+                    <div style={{display:'flex',gap:8,marginTop:6}}>
+                      <div style={{flex:1}}><label className="lbl">TL đặt (kg) *</label><input className="inp inp-xs mono" value={it.ordered} onChange={e=>setPoForm(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,ordered:e.target.value}:x)}))} placeholder="vd: 10000"/></div>
+                      <div style={{flex:1}}><label className="lbl">Đơn giá bán KH (đ/kg)</label><input className="inp inp-xs mono" value={it.price} onChange={e=>setPoForm(p=>({...p,items:p.items.map((x,i)=>i===idx?{...x,price:e.target.value}:x)}))} placeholder="vd: 102000"/></div>
+                    </div>
+                  </div>
+                ))}
+                <button className="btn btn-ghost btn-sm" onClick={()=>setPoForm(p=>({...p,items:[...p.items,{...p.items[p.items.length-1],ordered:'',price:''}]}))} style={{fontSize:'.7rem'}}>＋ Thêm dòng hàng (chép quy cách dòng trên)</button>
               </div>
-              <div style={{fontSize:'.66rem',color:'#64748b',fontWeight:600}}>ℹ️ TL đã giao khởi tạo = 0 · Tồn chưa giao = TL đặt. PO nhiều SKU: thêm xong dòng đầu, form giữ Số PO + Khách để nhập tiếp.</div>
+              <div style={{fontSize:'.66rem',color:'#64748b',fontWeight:600}}>ℹ️ Mỗi dòng: TL đã giao khởi tạo = 0, Tồn chưa giao = TL đặt. Trùng Số PO + SKU sẽ bị chặn từng dòng (các dòng hợp lệ vẫn được ghi).</div>
               <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:4}}>
                 <button className="btn btn-ghost btn-sm" onClick={()=>setPoForm(p=>({...p,open:false}))}>Đóng</button>
-                <button className="btn btn-success btn-sm" onClick={submitAddPO}>✓ Thêm dòng PO (PIN)</button>
+                <button className="btn btn-success btn-sm" onClick={submitAddPO}>✓ Ghi {poForm.items.length} dòng (PIN)</button>
               </div>
             </div>
           </div>
