@@ -91,7 +91,10 @@ function doPost(e){
     if (body.action === 'appendFloorHistory') return json_(appendFloorHistory_(body.payload || {}, by));
     if (body.action === 'addImportPrice')     return json_(addImportPrice_(body.payload || {}, by));
     if (body.action === 'setCompetitorPrice') return json_(setCompetitorPrice_(body.payload || {}, by));
-    if (body.action === 'addPORow')          return json_(addPORow_(body.payload || {}, by));
+    if (body.action === 'addPORows')         return json_(addPORows_(body.payload || {}, by));
+    if (body.action === 'updatePORow')        return json_(updatePORow_(body.payload || {}, by));
+    if (body.action === 'deletePORow')        return json_(deletePORow_(body.payload || {}, by));
+    if (body.action === 'deletePO')           return json_(deletePO_(body.payload || {}, by));
     if (body.action === 'storeMarket'){ // GĐ3a plan B: GitHub Actions kéo giá rồi đẩy vào đây
       const p = body.payload || {};
       const n = x => { const f = parseFloat(x); return isNaN(f) ? null : f; };
@@ -250,12 +253,9 @@ function setBuyRequest_(p, by){
   return { ok: false, error: 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max' };
 }
 
-// R8: THÊM dòng PO mới vào sheet PO (chặn trùng Số PO + SKU; TL giao = 0, Tồn chưa giao = TL đặt)
-function addPORow_(p, by){
-  const sh = sheetByGid_(GID_PO);
-  const data = sh.getDataRange().getValues();
-  const H = data[0];
-  const c = {
+// R9: BỘ PO 2 CHIỀU ĐẦY ĐỦ — thêm nhiều dòng / sửa / xóa dòng / xóa cả PO (PIN + AUDIT_LOG)
+function poCols_(H){
+  return {
     po: colIdx_(H, ['sopo', 'so po', 'po']),
     sup: colIdx_(H, ['khachhang', 'khach hang', 'nhacc', 'nha cc', 'supplier', 'customer']),
     date: colIdx_(H, ['ngaypo', 'ngay po', 'date']),
@@ -267,31 +267,95 @@ function addPORow_(p, by){
     rem: colIdx_(H, ['tonchuagiao', 'ton chua giao (kg)', 'ton chua giao']),
     pr: colIdx_(H, ['dongia', 'don gia (d/kg)', 'don gia', 'price']),
   };
-  if (c.po < 0 || c.a < 0 || c.ord < 0) return { ok: false, error: 'Sheet PO thiếu cột Số PO / Mác / TL đặt' };
-  const ordered = parseFloat(p.ordered);
-  if (isNaN(ordered) || ordered <= 0) return { ok: false, error: 'TL đặt không hợp lệ' };
-  // chặn trùng Số PO + SKU
+}
+function poFindRow_(data, c, p){ // trả index dòng (1-based trong data) khớp PO + SKU, -1 nếu không có
   const want = skuKey_(p);
   for (var i = 1; i < data.length; i++){
     if (norm_(data[i][c.po]) !== norm_(p.po)) continue;
     const key = skuKey_({ alloy: data[i][c.a], temper: data[i][c.t], thickness: data[i][c.d],
                           width: data[i][c.r], length: data[i][c.l], coating: coat_(data[i][c.ph]) });
-    if (key === want) return { ok: false, error: 'PO ' + p.po + ' đã có đúng SKU này — dùng nút ✎ để sửa TL đã giao' };
+    if (key === want) return i;
   }
-  const row = new Array(H.length).fill('');
-  row[c.po] = p.po; if (c.sup >= 0) row[c.sup] = p.supplier || '';
-  if (c.date >= 0) row[c.date] = p.poDate || Utilities.formatDate(new Date(), 'GMT+7', 'dd/MM/yyyy');
-  row[c.a] = p.alloy; if (c.t >= 0) row[c.t] = p.temper || '';
-  if (c.d >= 0) row[c.d] = p.thickness; if (c.r >= 0) row[c.r] = p.width;
-  if (c.l >= 0) row[c.l] = p.length || 'C'; if (c.ph >= 0) row[c.ph] = coat_(p.coating);
-  row[c.ord] = ordered;
-  if (c.del >= 0) row[c.del] = 0;
-  if (c.rem >= 0) row[c.rem] = ordered;
-  if (c.pr >= 0 && p.price > 0) row[c.pr] = parseFloat(p.price);
-  sh.appendRow(row);
-  audit_(by, 'THÊM PO MỚI', 'PO ' + p.po + ' (' + (p.supplier || '?') + ') — ' + skuLabel_(p), '',
-         'TL đặt=' + ordered + ' kg, đơn giá=' + (p.price || 0) + ' đ/kg');
-  return { ok: true, msg: 'Đã thêm PO ' + p.po + ' — ' + skuLabel_(p) + ' (' + ordered + ' kg)' };
+  return -1;
+}
+// THÊM nhiều dòng vào 1 PO (mới hoặc sẵn có). Dòng trùng PO+SKU bị BỎ QUA, dòng hợp lệ vẫn ghi.
+function addPORows_(p, by){
+  const sh = sheetByGid_(GID_PO);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = poCols_(H);
+  if (c.po < 0 || c.a < 0 || c.ord < 0) return { ok: false, error: 'Sheet PO thiếu cột Số PO / Mác / TL đặt' };
+  const items = Array.isArray(p.items) ? p.items : [];
+  if (!items.length) return { ok: false, error: 'Không có dòng hàng nào' };
+  const added = [], skipped = [];
+  items.forEach(function(it){
+    const ordered = parseFloat(it.ordered);
+    if (isNaN(ordered) || ordered <= 0){ skipped.push(skuLabel_(it) + ' (TL đặt sai)'); return; }
+    const probe = { po: p.po, alloy: it.alloy, temper: it.temper, thickness: it.thickness, width: it.width, length: it.length, coating: it.coating };
+    if (poFindRow_(data, c, probe) >= 0){ skipped.push(skuLabel_(it) + ' (trùng)'); return; }
+    const row = new Array(H.length).fill('');
+    row[c.po] = p.po; if (c.sup >= 0) row[c.sup] = p.supplier || '';
+    if (c.date >= 0) row[c.date] = p.poDate || Utilities.formatDate(new Date(), 'GMT+7', 'dd/MM/yyyy');
+    row[c.a] = it.alloy; if (c.t >= 0) row[c.t] = it.temper || '';
+    if (c.d >= 0) row[c.d] = it.thickness; if (c.r >= 0) row[c.r] = it.width;
+    if (c.l >= 0) row[c.l] = it.length || 'C'; if (c.ph >= 0) row[c.ph] = coat_(it.coating);
+    row[c.ord] = ordered; if (c.del >= 0) row[c.del] = 0; if (c.rem >= 0) row[c.rem] = ordered;
+    if (c.pr >= 0 && it.price > 0) row[c.pr] = parseFloat(it.price);
+    sh.appendRow(row);
+    data.push(row); // để check trùng giữa các dòng trong CÙNG lần gửi
+    added.push(skuLabel_(it) + ' ' + ordered + 'kg');
+  });
+  if (added.length) audit_(by, 'THÊM HÀNG VÀO PO', 'PO ' + p.po + ' (' + (p.supplier || '?') + ')', '', added.join(' | '));
+  if (!added.length) return { ok: false, error: 'Không ghi được dòng nào: ' + skipped.join(', ') };
+  return { ok: true, msg: 'Đã ghi ' + added.length + ' dòng vào PO ' + p.po + (skipped.length ? ' · BỎ QUA ' + skipped.length + ' dòng: ' + skipped.join(', ') : '') };
+}
+// SỬA TL đặt + đơn giá 1 dòng (SKU giữ nguyên). Tồn chưa giao = TL đặt − đã giao (nếu không phải công thức).
+function updatePORow_(p, by){
+  const sh = sheetByGid_(GID_PO);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = poCols_(H);
+  const i = poFindRow_(data, c, p);
+  if (i < 0) return { ok: false, error: 'Không tìm thấy PO ' + p.po + ' + SKU ' + skuLabel_(p) };
+  const ordered = parseFloat(p.ordered);
+  if (isNaN(ordered) || ordered <= 0) return { ok: false, error: 'TL đặt không hợp lệ' };
+  const delivered = c.del >= 0 ? (parseFloat(data[i][c.del]) || 0) : 0;
+  if (ordered < delivered) return { ok: false, error: 'TL đặt (' + ordered + ') nhỏ hơn TL đã giao (' + delivered + ')' };
+  const oldOrd = data[i][c.ord], oldPr = c.pr >= 0 ? data[i][c.pr] : '';
+  sh.getRange(i + 1, c.ord + 1).setValue(ordered);
+  if (c.pr >= 0 && p.price > 0) sh.getRange(i + 1, c.pr + 1).setValue(parseFloat(p.price));
+  if (c.rem >= 0 && sh.getRange(i + 1, c.rem + 1).getFormula() === ''){
+    sh.getRange(i + 1, c.rem + 1).setValue(Math.max(ordered - delivered, 0));
+  }
+  audit_(by, 'SỬA DÒNG PO', 'PO ' + p.po + ' — ' + skuLabel_(p),
+         'TL đặt=' + oldOrd + ' giá=' + oldPr, 'TL đặt=' + ordered + ' giá=' + (p.price > 0 ? p.price : oldPr));
+  return { ok: true, msg: 'PO ' + p.po + ' — ' + skuLabel_(p) + ': TL đặt ' + oldOrd + ' → ' + ordered + ' kg' };
+}
+// XÓA 1 dòng PO (giá trị cũ lưu AUDIT_LOG)
+function deletePORow_(p, by){
+  const sh = sheetByGid_(GID_PO);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = poCols_(H);
+  const i = poFindRow_(data, c, p);
+  if (i < 0) return { ok: false, error: 'Không tìm thấy PO ' + p.po + ' + SKU ' + skuLabel_(p) };
+  const old = 'TL đặt=' + data[i][c.ord] + ' đã giao=' + (c.del >= 0 ? data[i][c.del] : '?') + ' giá=' + (c.pr >= 0 ? data[i][c.pr] : '?');
+  sh.deleteRow(i + 1);
+  audit_(by, 'XÓA DÒNG PO', 'PO ' + p.po + ' — ' + skuLabel_(p), old, '(đã xóa)');
+  return { ok: true, msg: 'Đã xóa dòng ' + skuLabel_(p) + ' khỏi PO ' + p.po };
+}
+// XÓA CẢ PO — mọi dòng cùng Số PO (xóa từ dưới lên để không lệch index)
+function deletePO_(p, by){
+  const sh = sheetByGid_(GID_PO);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = poCols_(H);
+  const idxs = [];
+  for (var i = 1; i < data.length; i++){ if (norm_(data[i][c.po]) === norm_(p.po)) idxs.push(i); }
+  if (!idxs.length) return { ok: false, error: 'Không tìm thấy PO ' + p.po };
+  const summary = idxs.map(function(i){
+    return skuLabel_({ alloy: data[i][c.a], temper: data[i][c.t], thickness: data[i][c.d], width: data[i][c.r], length: data[i][c.l], coating: coat_(data[i][c.ph]) })
+      + ' đặt=' + data[i][c.ord] + ' giao=' + (c.del >= 0 ? data[i][c.del] : '?');
+  }).join(' | ');
+  for (var k = idxs.length - 1; k >= 0; k--) sh.deleteRow(idxs[k] + 1);
+  audit_(by, 'XÓA CẢ PO', 'PO ' + p.po + ' (' + idxs.length + ' dòng)', summary, '(đã xóa toàn bộ)');
+  return { ok: true, msg: 'Đã xóa PO ' + p.po + ' — ' + idxs.length + ' dòng hàng' };
 }
 
 // Cập nhật "TL đã giao (kg)" của 1 dòng PO (tìm theo Số PO + SKU)
