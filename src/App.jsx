@@ -530,6 +530,16 @@ const App=()=>{
       return data;
     }catch(e){alert('❌ Lỗi gọi Apps Script:\n'+e.message);return null;}
   },[gasConfig]);
+  // R6: Sàn được duyệt đủ cấp → tự append vào GSheet sheet lich_su_gia_san (gid 1612937978).
+  // Chạy NỀN: lỗi/chưa cấu hình Apps Script chỉ console.warn, KHÔNG chặn luồng duyệt (GitHub vẫn là nguồn chính).
+  const pushFloorHistoryToSheet=useCallback(async(entry,by)=>{
+    if(!gasConfig.url) return;
+    try{
+      const res=await fetch(gasConfig.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({secret:gasConfig.secret||'',action:'appendFloorHistory',by,payload:entry})});
+      const d=await res.json();
+      if(!d.ok) console.warn('appendFloorHistory GSheet:',d.error);
+    }catch(e){console.warn('appendFloorHistory GSheet:',e.message);}
+  },[gasConfig]);
   // Nhập PIN → trả về người duyệt tương ứng (định danh người ghi GSheet)
   const identifyByPin=useCallback(async(message)=>{
     const pin=await askPin(message||'🔐 Nhập PIN của bạn để ghi vào GSheet (định danh + lưu vết):');
@@ -906,6 +916,8 @@ const App=()=>{
         const histBody={message:`📚 Append history: Sàn ${weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
         if(historySha) histBody.sha=historySha;
         await ghAPI('PUT','contents/floor/history.json',histBody);
+        // R6: ghi thêm vào GSheet lich_su_gia_san (nền)
+        pushFloorHistoryToSheet({weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,exchangeRate:payload.exchangeRate,sourceFile:fname,groups:payload.groups},me.name);
       }
       setFloorStatus(p=>({...p,loading:false,lastAction:`✓ Đã gửi Sàn ${weekLabel}`}));
       alert(`✓ Đã gửi Sàn ${weekLabel}!\nBạn: ${me.name} (đã ký bước ${stepOf(me,'floor')}).\n${prog1.done?'🎉 Đủ cấp — đã ban hành luôn.':'⏳ Chuyển bước kế tiếp: '+(prog1.nextApprover?prog1.nextApprover.name+' ('+prog1.nextApprover.role+')':'?')+'.'}`);
@@ -913,7 +925,7 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi gửi Sàn:\n${e.message}`);
     }
-  },[ghAPI,inputs,ghConfig.branch,approvers,loadApprovers,askPin,excludePOFloor,mgmtFloorOverride]);
+  },[ghAPI,inputs,ghConfig.branch,approvers,loadApprovers,askPin,excludePOFloor,mgmtFloorOverride,pushFloorHistoryToSheet]);
 
   // Tải danh sách Sàn pending + approved (Giám đốc xem)
   const listFloorSubmissions=useCallback(async()=>{
@@ -1099,6 +1111,8 @@ const App=()=>{
         const histBody={message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
         if(historySha) histBody.sha=historySha;
         await ghAPI('PUT','contents/floor/history.json',histBody);
+        // R6: ghi thêm vào GSheet lich_su_gia_san (nền)
+        pushFloorHistoryToSheet({weekLabel:payload.weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,exchangeRate:payload.exchangeRate,sourceFile:file.name,groups:payload.groups},signer.name);
         alert(`✓ ${signer.name} đã ký bước cuối.\n🎉 Sàn ${payload.weekLabel} ĐÃ DUYỆT ĐỦ CẤP.\n→ Chuyển /floor/approved/ + append history (${historyArr.length} bản).`);
       }else{
         // Chưa đủ cấp (hoặc bị bác) → ghi lại tại chỗ
@@ -1687,7 +1701,7 @@ const App=()=>{
       'BANG GIA SAN BAN HANH',
       `Ngay: ${source.issuedDate} ${source.issuedTime}  |  Nguoi lap: ${source.issuedBy}  |  Ty gia: ${source.exchangeRate}  |  LK: ${source.storageCostPct}%  CPTC: ${source.baseFinCostPct}%  HDKD: ${source.opsCostPct}%`,
     ];
-    const headers=['Nhom hang','Mac','Temper','Day min','Day max','SKUs','Ton kho (kg)','BQ Gia von','San tu dong','San ban hanh','Cot loi','Than thiet','KH le','BQ Doi thu','San Doi thu'];
+    const headers=['Nhom hang','Mac','Temper','Day min','Day max','SKUs','Ton kho (kg)','BQ Gia von','San tu dong','San ban hanh','A Group','B Group','C Group','BQ Doi thu','San Doi thu'];
     const dataRows=source.groups.map(g=>[
       g.label,g.alloy,g.temper||'-',g.minThick,g.maxThick,
       g.skus,g.totalQty,
