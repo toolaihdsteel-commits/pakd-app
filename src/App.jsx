@@ -1456,6 +1456,41 @@ const App=()=>{
     const res=await gasCall('markBuyReqDone',{alloy:r.alloy,temper:r.temper,thickness:r.thickness,width:r.width,length:r.length,coating:r.coating},me.name);
     if(res){alert(`✓ ${res.msg}\nNgười xử lý: ${me.name} (đã lưu vết).`);syncGoogleSheet('ms');}
   },[identifyByPin,gasCall,syncGoogleSheet]);
+  // ── R8: THÊM PO MỚI 2 chiều — form modal, PIN + lưu vết, chặn trùng PO+SKU ──
+  const [poForm,setPoForm]=useState({open:false,po:'',supplier:'',poDate:new Date().toLocaleDateString('vi-VN'),alloy:'A1050',temper:'H14',thickness:'1.0',width:'1200',length:'C',coating:'KP',ordered:'',price:''});
+  const submitAddPO=useCallback(async()=>{
+    const f=poForm;
+    if(!f.po.trim()||!f.supplier.trim()){alert('❌ Cần nhập Số PO và Khách hàng');return;}
+    const ordered=pn(f.ordered);
+    if(!ordered||ordered<=0){alert('❌ TL đặt (kg) không hợp lệ');return;}
+    const price=pn(f.price)||0;
+    const me=await identifyByPin('🔐 Nhập PIN để THÊM PO vào GSheet (định danh + lưu vết):');
+    if(!me) return;
+    const res=await gasCall('addPORow',{po:f.po.trim(),supplier:f.supplier.trim(),poDate:f.poDate,alloy:f.alloy,temper:f.temper,thickness:f.thickness,width:f.width,length:f.length,coating:f.coating,ordered,price},me.name);
+    if(res){
+      alert(`✓ ${res.msg}\nNgười nhập: ${me.name} (đã lưu vết).\n\nForm giữ nguyên Số PO + Khách hàng — nhập tiếp SKU khác cùng PO hoặc bấm Đóng.`);
+      setPoForm(p=>({...p,ordered:'',price:''}));
+      syncGoogleSheet('po');
+    }
+  },[poForm,identifyByPin,gasCall,syncGoogleSheet]);
+  // ── R8: tự Sync All lại khi dữ liệu cũ quá 20 phút (kiểm tra mỗi phút + khi quay lại tab) ──
+  const lastSyncAtRef=useRef(null);
+  useEffect(()=>{lastSyncAtRef.current=dbStatus.lastSyncAt||null;},[dbStatus.lastSyncAt]);
+  const dbLoadingRef=useRef(false);
+  useEffect(()=>{dbLoadingRef.current=!!dbStatus.loading;},[dbStatus.loading]);
+  useEffect(()=>{
+    if(!ghVerified) return;
+    const STALE_MS=20*60*1000;
+    const check=()=>{
+      if(dbLoadingRef.current) return;
+      const last=lastSyncAtRef.current;
+      if(!last||Date.now()-last>STALE_MS) syncGoogleSheet('all');
+    };
+    const t=setInterval(check,60000);
+    const onVis=()=>{if(document.visibilityState==='visible') check();};
+    document.addEventListener('visibilitychange',onVis);
+    return()=>{clearInterval(t);document.removeEventListener('visibilitychange',onVis);};
+  },[ghVerified,syncGoogleSheet]);
   // ── R7: Phòng mua NHẬP GIÁ CIF MỚI cho 1 nhóm hàng → thêm dòng mới vào sheet UpdatedImportPrice ──
   const handleAddImportPrice=useCallback(async(g)=>{
     const raw=window.prompt(`💲 NHẬP GIÁ CIF MỚI — ${g.label}\n${g.alloy}${g.temper?' '+g.temper:''} · ${g.minThick}–${g.maxThick} mm\n\nGiá CIF chào (USD/tấn):`,'');
@@ -3955,6 +3990,7 @@ URL.revokeObjectURL(url);
                 <div style={{display:'flex',gap:8,alignItems:'center'}}>
                   <button className="btn btn-ghost btn-sm" onClick={()=>syncGoogleSheet('po')} disabled={dbStatus.loading||!ghVerified}>{dbStatus.loading?<div className="spinner"/>:<Ic.Refresh/>} Sync PO</button>
                   <button className="btn btn-purple btn-sm" onClick={createPAFromShortPO} disabled={poData.length===0} title="Gộp các SKU 'Cần đặt thêm' (kho + đang về không đủ giao PO) thành danh sách SKU bên tab PAKD Mua">🛒 Tạo PA Mua từ SKU thiếu</button>
+                  {gasConfig.url&&<button className="btn btn-success btn-sm" onClick={()=>setPoForm(p=>({...p,open:true}))} title="Thêm dòng PO mới vào GSheet (cần PIN, lưu vết AUDIT_LOG)">➕ Thêm PO</button>}
                   {poData.length===0?<span className="tag tr pulse">⚠ Chưa có dữ liệu – nhấn Sync</span>:<span className="tag tg">✓ {poData.length} dòng PO</span>}
                 </div>
               </div>
@@ -4260,6 +4296,34 @@ URL.revokeObjectURL(url);
       )}
 
       {/* MODAL: GITHUB CONFIG */}
+      {/* R8: MODAL THÊM PO MỚI */}
+      {poForm.open&&(
+        <div onClick={()=>setPoForm(p=>({...p,open:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'20px 24px',maxWidth:520,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,borderBottom:'2px solid #e2e8f0',paddingBottom:8}}>
+              <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>➕ Thêm PO mới <span style={{fontSize:'.62rem',fontWeight:700,color:'#64748b'}}>(ghi thẳng GSheet · cần PIN · lưu vết)</span></h3>
+              <button onClick={()=>setPoForm(p=>({...p,open:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:9}}>
+              <div style={{display:'flex',gap:8}}>
+                <div style={{flex:1}}><label className="lbl">Số PO *</label><input className="inp" value={poForm.po} onChange={e=>setPoForm(p=>({...p,po:e.target.value}))} placeholder="vd: PO-2026-068"/></div>
+                <div style={{flex:1}}><label className="lbl">Khách hàng *</label><input className="inp" value={poForm.supplier} onChange={e=>setPoForm(p=>({...p,supplier:e.target.value}))} placeholder="vd: THACO"/></div>
+                <div style={{width:110}}><label className="lbl">Ngày PO</label><input className="inp" value={poForm.poDate} onChange={e=>setPoForm(p=>({...p,poDate:e.target.value}))} placeholder="dd/mm/yyyy"/></div>
+              </div>
+              <div><label className="lbl">Quy cách SKU</label><SkuSel row={poForm} onChange={patch=>setPoForm(p=>({...p,...patch}))}/></div>
+              <div style={{display:'flex',gap:8}}>
+                <div style={{flex:1}}><label className="lbl">TL đặt (kg) *</label><input className="inp mono" value={poForm.ordered} onChange={e=>setPoForm(p=>({...p,ordered:e.target.value}))} placeholder="vd: 10000"/></div>
+                <div style={{flex:1}}><label className="lbl">Đơn giá bán KH (đ/kg)</label><input className="inp mono" value={poForm.price} onChange={e=>setPoForm(p=>({...p,price:e.target.value}))} placeholder="vd: 102000"/></div>
+              </div>
+              <div style={{fontSize:'.66rem',color:'#64748b',fontWeight:600}}>ℹ️ TL đã giao khởi tạo = 0 · Tồn chưa giao = TL đặt. PO nhiều SKU: thêm xong dòng đầu, form giữ Số PO + Khách để nhập tiếp.</div>
+              <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:4}}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>setPoForm(p=>({...p,open:false}))}>Đóng</button>
+                <button className="btn btn-success btn-sm" onClick={submitAddPO}>✓ Thêm dòng PO (PIN)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {ghStatus.configOpen&&(
         <div onClick={()=>setGhStatus(p=>({...p,configOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
           <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:560,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
