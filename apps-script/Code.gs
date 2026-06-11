@@ -89,6 +89,8 @@ function doPost(e){
     if (body.action === 'updatePODelivered') return json_(updatePODelivered_(body.payload || {}, by));
     if (body.action === 'setBuyRequest')     return json_(setBuyRequest_(body.payload || {}, by));
     if (body.action === 'appendFloorHistory') return json_(appendFloorHistory_(body.payload || {}, by));
+    if (body.action === 'addImportPrice')     return json_(addImportPrice_(body.payload || {}, by));
+    if (body.action === 'setCompetitorPrice') return json_(setCompetitorPrice_(body.payload || {}, by));
     if (body.action === 'storeMarket'){ // GĐ3a plan B: GitHub Actions kéo giá rồi đẩy vào đây
       const p = body.payload || {};
       const n = x => { const f = parseFloat(x); return isNaN(f) ? null : f; };
@@ -132,6 +134,7 @@ function markBuyReqDone_(p, by){
 
 // R6: Sàn duyệt đủ cấp → append vào sheet lich_su_gia_san (1 dòng / nhóm hàng)
 const GID_LICH_SU_GIA_SAN = 1612937978;
+const GID_UPDATED_IMPORT = 1371908903; // FIX R7: bị rơi khai báo từ R2 — email cảnh báo premium lỗi mục này
 function appendFloorHistory_(p, by){
   const sh = sheetByGid_(GID_LICH_SU_GIA_SAN);
   if (sh.getLastRow() === 0){
@@ -152,6 +155,69 @@ function appendFloorHistory_(p, by){
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   audit_(by, 'BAN HÀNH GIÁ SÀN → lich_su_gia_san', 'Sàn ' + (p.weekLabel || '?') + ' — ' + rows.length + ' nhóm', '', p.sourceFile || '');
   return { ok: true, msg: 'Đã ghi ' + rows.length + ' nhóm vào lich_su_gia_san' };
+}
+
+// R7: Phòng mua nhập GIÁ CIF MỚI → APPEND dòng mới vào sheet UpdatedImportPrice (gid 1371908903)
+function uipCols_(H){
+  return {
+    d: colIdx_(H, ['updatedate', 'update date']), a: colIdx_(H, ['alloy', 'mac']), t: colIdx_(H, ['temper']),
+    mn: colIdx_(H, ['minthick', 'min thick']), mx: colIdx_(H, ['maxthick', 'max thick']),
+    f: colIdx_(H, ['pricefc', 'price fc']), note: colIdx_(H, ['note', 'ghichu', 'ghi chu']),
+    k: colIdx_(H, ['importcoef', 'import coef', 'heso']),
+    cp: colIdx_(H, ['competitorprice', 'competitor price']), cf: colIdx_(H, ['competitorfloorprice', 'competitor floor price']),
+  };
+}
+function uipToIso_(v){
+  if (v instanceof Date) return Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd');
+  const m = String(v || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '';
+}
+function uipGroupMatch_(row, c, p){
+  return norm_(row[c.a]) === norm_(p.alloy) && norm_(row[c.t]) === norm_(p.temper || '')
+    && normDim_(row[c.mn]) === normDim_(p.minThick) && normDim_(row[c.mx]) === normDim_(p.maxThick);
+}
+function addImportPrice_(p, by){
+  const sh = sheetByGid_(GID_UPDATED_IMPORT);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = uipCols_(H);
+  if (c.f < 0 || c.a < 0) return { ok: false, error: 'Sheet Giá nhập thiếu cột PriceFC/Alloy' };
+  const price = parseFloat(p.priceFC);
+  if (isNaN(price) || price <= 0) return { ok: false, error: 'Giá CIF không hợp lệ' };
+  // importCoef: kế thừa dòng MỚI NHẤT cùng nhóm, mặc định 1.015
+  let coef = 1.015, lastIso = '';
+  for (var i = 1; i < data.length; i++){
+    if (!uipGroupMatch_(data[i], c, p)) continue;
+    const iso = uipToIso_(data[i][c.d]);
+    if (iso >= lastIso){ lastIso = iso; const k = parseFloat(data[i][c.k]); if (k > 0) coef = k; }
+  }
+  const row = new Array(H.length).fill('');
+  if (c.d >= 0) row[c.d] = Utilities.formatDate(new Date(), 'GMT+7', 'dd/MM/yyyy');
+  row[c.a] = p.alloy; if (c.t >= 0) row[c.t] = p.temper || '';
+  if (c.mn >= 0) row[c.mn] = p.minThick; if (c.mx >= 0) row[c.mx] = p.maxThick;
+  row[c.f] = price; if (c.note >= 0) row[c.note] = p.note || ''; if (c.k >= 0) row[c.k] = coef;
+  sh.appendRow(row);
+  audit_(by, 'NHẬP GIÁ CIF MỚI', p.alloy + ' ' + (p.temper || '') + ' ' + p.minThick + '-' + p.maxThick + 'mm', '', price + ' USD/t (' + (p.note || '') + ')');
+  return { ok: true, msg: 'Đã thêm giá CIF ' + price + ' $/t cho ' + p.alloy + ' ' + (p.temper || '') + ' ' + p.minThick + '-' + p.maxThick + 'mm (hệ số ' + coef + ')' };
+}
+// R7: TP Kinh doanh ghi giá ĐỐI THỦ vào dòng CIF MỚI NHẤT của nhóm
+function setCompetitorPrice_(p, by){
+  const sh = sheetByGid_(GID_UPDATED_IMPORT);
+  const data = sh.getDataRange().getValues();
+  const H = data[0]; const c = uipCols_(H);
+  if (c.cp < 0 && c.cf < 0) return { ok: false, error: 'Sheet Giá nhập thiếu cột CompetitorPrice/CompetitorFloorPrice' };
+  let bestRow = -1, bestIso = '';
+  for (var i = 1; i < data.length; i++){
+    if (!uipGroupMatch_(data[i], c, p)) continue;
+    const iso = uipToIso_(data[i][c.d]);
+    if (iso >= bestIso){ bestIso = iso; bestRow = i; }
+  }
+  if (bestRow < 0) return { ok: false, error: 'Chưa có dòng giá CIF nào cho nhóm này — nhập "💲 CIF mới" trước' };
+  const oldCp = c.cp >= 0 ? data[bestRow][c.cp] : '', oldCf = c.cf >= 0 ? data[bestRow][c.cf] : '';
+  if (p.competitorPrice != null && c.cp >= 0) sh.getRange(bestRow + 1, c.cp + 1).setValue(parseFloat(p.competitorPrice));
+  if (p.competitorFloorPrice != null && c.cf >= 0) sh.getRange(bestRow + 1, c.cf + 1).setValue(parseFloat(p.competitorFloorPrice));
+  audit_(by, 'NHẬP GIÁ ĐỐI THỦ', p.alloy + ' ' + (p.temper || '') + ' ' + p.minThick + '-' + p.maxThick + 'mm (dòng ' + bestIso + ')',
+         'CP=' + oldCp + ' CF=' + oldCf, 'CP=' + (p.competitorPrice != null ? p.competitorPrice : oldCp) + ' CF=' + (p.competitorFloorPrice != null ? p.competitorFloorPrice : oldCf));
+  return { ok: true, msg: 'Đã ghi giá đối thủ vào dòng CIF ngày ' + bestIso };
 }
 
 // R4: GHI/SỬA đề xuất mua từ app (TP Kinh doanh…) → cột yeucaumua + tuanyeucau (lưu vết giá trị cũ)
