@@ -88,6 +88,7 @@ function doPost(e){
     if (body.action === 'markBuyReqDone')    return json_(markBuyReqDone_(body.payload || {}, by));
     if (body.action === 'updatePODelivered') return json_(updatePODelivered_(body.payload || {}, by));
     if (body.action === 'setBuyRequest')     return json_(setBuyRequest_(body.payload || {}, by));
+    if (body.action === 'appendFloorHistory') return json_(appendFloorHistory_(body.payload || {}, by));
     if (body.action === 'storeMarket'){ // GĐ3a plan B: GitHub Actions kéo giá rồi đẩy vào đây
       const p = body.payload || {};
       const n = x => { const f = parseFloat(x); return isNaN(f) ? null : f; };
@@ -127,6 +128,30 @@ function markBuyReqDone_(p, by){
     return { ok: true, msg: 'Đã xóa đề xuất mua của ' + skuLabel_(p) };
   }
   return { ok: false, error: 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max' };
+}
+
+// R6: Sàn duyệt đủ cấp → append vào sheet lich_su_gia_san (1 dòng / nhóm hàng)
+const GID_LICH_SU_GIA_SAN = 1612937978;
+function appendFloorHistory_(p, by){
+  const sh = sheetByGid_(GID_LICH_SU_GIA_SAN);
+  if (sh.getLastRow() === 0){
+    sh.appendRow(['Ngày duyệt', 'Tuần', 'Người trình', 'Người duyệt', 'Nhóm hàng', 'Mác', 'Temper', 'Dày min', 'Dày max',
+                  'SKUs', 'Tồn kho (kg)', 'BQ GV (đ/kg)', 'Sàn tự động (đ/kg)', 'Sàn ban hành (đ/kg)',
+                  'A Group (đ/kg)', 'B Group (đ/kg)', 'C Group (đ/kg)', 'Tỷ giá', 'Ghi chú', 'File nguồn']);
+    sh.setFrozenRows(1);
+  }
+  const groups = Array.isArray(p.groups) ? p.groups : [];
+  if (!groups.length) return { ok: false, error: 'Không có nhóm hàng nào trong bản Sàn' };
+  const dt = p.approvedAt ? new Date(p.approvedAt) : new Date();
+  const dtxt = Utilities.formatDate(dt, 'GMT+7', 'dd/MM/yyyy HH:mm');
+  const n = v => { const f = parseFloat(v); return isNaN(f) ? '' : Math.round(f); };
+  const rows = groups.map(g => [dtxt, p.weekLabel || '', p.requestedBy || '', p.approvedBy || by || '',
+    g.label || '', g.alloy || '', g.temper || '', g.minThick != null ? g.minThick : '', g.maxThick != null ? g.maxThick : '',
+    g.skus || '', n(g.totalQty), n(g.avgCost), n(g.autoFloor != null ? g.autoFloor : g.avgFloor), n(g.publishedFloor),
+    n(g.corePrice), n(g.loyalPrice), n(g.newPrice), p.exchangeRate || '', p.requestNote || '', p.sourceFile || '']);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  audit_(by, 'BAN HÀNH GIÁ SÀN → lich_su_gia_san', 'Sàn ' + (p.weekLabel || '?') + ' — ' + rows.length + ' nhóm', '', p.sourceFile || '');
+  return { ok: true, msg: 'Đã ghi ' + rows.length + ' nhóm vào lich_su_gia_san' };
 }
 
 // R4: GHI/SỬA đề xuất mua từ app (TP Kinh doanh…) → cột yeucaumua + tuanyeucau (lưu vết giá trị cũ)
