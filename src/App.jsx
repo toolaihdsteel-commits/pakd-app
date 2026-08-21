@@ -3543,7 +3543,7 @@ URL.revokeObjectURL(url);
           </div>
         )}
 
-        {/* ════ TAB BÁO CÁO ════ */}
+        {/* ════ TAB THỊ TRƯỜNG + BIỂU ĐỒ KỸ THUẬT (tách ra components/) ════ */}
         {tab==='market'&&<MarketTab marketData={marketData} marketErr={marketErr} loadMarket={loadMarket} allRawImportPrices={allRawImportPrices} inputs={inputs} setInputs={setInputs} setProducts={setProducts} scenarios={scenarios} setScenarios={setScenarios} saveScenario={saveScenario} setTab={setTab} bg1={bg1} bg2={bg2} border2={border2}/>}
         {tab==='techchart'&&<EastMoneyChart marketData={marketData} bg1={bg1} bg2={bg2} border2={border2}/>}
         {/* ════ TAB FLOOR HISTORY ════ */}
