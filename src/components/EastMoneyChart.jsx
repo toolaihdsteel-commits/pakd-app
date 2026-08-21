@@ -1,6 +1,7 @@
 import React from 'react';
 const {useState,useEffect,useRef,useCallback}=React;
 import {KHUNG_TG,MA_NHOM,khungTuPeriod,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} from '../lib/eastmoney';
+import {CONG_CU,KIEU_VE,demVe,khoiPhucVe,luuVe,xoaHet} from '../lib/vekythuat';
 
 // ═══ TAB 📊 BIỂU ĐỒ KỸ THUẬT — nến nhôm SHFE (GĐ2) ═══
 // klinecharts chạm `window` NGAY LÚC IMPORT → phải nạp động trong useEffect,
@@ -25,14 +26,25 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [soNen,setSoNen]=useState(0);
   const [gia,setGia]=useState(null);
   const [phien,setPhien]=useState(()=>trangThaiPhien());
+  const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng'
+  const [demNet,setDemNet]=useState({ngang:0,xuHuong:0,tong:0});
+  const [dangChon,setDangChon]=useState(null);// id nét đang chọn (để xoá bằng phím Delete)
 
   const boxRef=useRef(null);
   const chartRef=useRef(null);
   const huyRef=useRef(null);
   const epTaiRef=useRef(false);   // true = bỏ qua nhớ tạm, gọi thẳng mạng (nút Làm mới)
+  // Các callback của overlay sống ngoài vòng render của React → phải đọc mã và
+  // khung qua ref, không thể bắt qua closure (sẽ dính giá trị cũ).
+  const maRef=useRef('alm');
+  const khungRef=useRef('101');
+  const chonRef=useRef(null);
 
   const kh=timKhung(khungK);
   const mInfo=timMa(ma);
+  maRef.current=ma; khungRef.current=khungK;
+
+  const capNhatDem=useCallback(()=>setDemNet(demVe(maRef.current,khungRef.current)),[]);
 
   // ── Khởi tạo biểu đồ 1 lần (nạp động klinecharts) ──
   useEffect(()=>{
@@ -94,6 +106,9 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
             chart.setStyles({candle:{type:g.kieu==='trongNgay'?'area':'candle_solid'}});
             callback(g.nen,false);
             setSoNen(g.nen.length); setNguon(g.nguon); setCanhBao(g.canhBao||null);
+            // Nét vẽ phải dựng lại SAU khi có nến, vì toạ độ neo theo timestamp
+            khoiPhucVe(chart,maHT,khHT);
+            setDemNet(demVe(maHT,khHT));
             requestAnimationFrame(()=>chartRef.current?.resize());
             setTimeout(()=>chartRef.current?.resize(),80);
           }catch(e){
@@ -141,6 +156,61 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
     chart.setPeriod({...kh.period});         // object mới để chart coi là thay đổi
   },[ma,kh.period]);
+
+  // ── Công cụ vẽ ────────────────────────────────────────────────────────
+  const chonCongCu=useCallback((t)=>{
+    const chart=chartRef.current; if(!chart) return;
+    if(!t.overlay){ setCongCu(''); return; }
+    setCongCu(t.k);
+    // Truyền tên overlay (không kèm points) = bật chế độ vẽ, chờ người dùng bấm
+    chart.createOverlay({
+      name:t.overlay,
+      styles:KIEU_VE[t.overlay],
+      extendData:{khung:khungRef.current},
+      onDrawEnd:()=>{
+        luuVe(chart,maRef.current,khungRef.current);
+        setDemNet(demVe(maRef.current,khungRef.current));
+        setCongCu('');
+        return false;
+      },
+      onRemoved:()=>{
+        luuVe(chart,maRef.current,khungRef.current);
+        setDemNet(demVe(maRef.current,khungRef.current));
+        chonRef.current=null; setDangChon(null);
+        return false;
+      },
+      onSelected:(e)=>{ chonRef.current=e?.overlay?.id||null; setDangChon(chonRef.current); return false; },
+      onDeselected:()=>{ chonRef.current=null; setDangChon(null); return false; },
+    });
+  },[]);
+
+  const xoaNetDangChon=useCallback(()=>{
+    const chart=chartRef.current; if(!chart||!chonRef.current) return;
+    chart.removeOverlay({id:chonRef.current});
+    chonRef.current=null; setDangChon(null);
+    luuVe(chart,maRef.current,khungRef.current);
+    setDemNet(demVe(maRef.current,khungRef.current));
+  },[]);
+
+  const xoaTatCaNet=useCallback(()=>{
+    const chart=chartRef.current; if(!chart) return;
+    if(!window.confirm('Xoá toàn bộ đường xu hướng và đường ngang của mã này?')) return;
+    xoaHet(chart,maRef.current);
+    chonRef.current=null; setDangChon(null); setCongCu('');
+    setDemNet(demVe(maRef.current,khungRef.current));
+  },[]);
+
+  // Phím Delete/Backspace xoá nét đang chọn — thói quen quen thuộc khi vẽ
+  useEffect(()=>{
+    const onKey=(e)=>{
+      if((e.key!=='Delete'&&e.key!=='Backspace')||!chonRef.current) return;
+      const el=document.activeElement;
+      if(el&&/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;  // đang gõ thì thôi
+      e.preventDefault(); xoaNetDangChon();
+    };
+    window.addEventListener('keydown',onKey);
+    return()=>window.removeEventListener('keydown',onKey);
+  },[xoaNetDangChon]);
 
   // ── Giá hiện tại + trạng thái phiên; làm mới 30 s trong giờ giao dịch ──
   useEffect(()=>{
@@ -200,6 +270,33 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           </span>
         </div>
 
+        {/* Thanh công cụ vẽ */}
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10,
+                     background:bg2,border:`1px solid ${border2}`,borderRadius:8,padding:'8px 10px'}}>
+          <span style={{fontSize:'.66rem',fontWeight:900,color:'#64748b'}}>VẼ</span>
+          <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+            {CONG_CU.map(t=>(
+              <button key={t.k} onClick={()=>chonCongCu(t)} title={t.mota} style={nut(congCu===t.k)}>{t.l}</button>
+            ))}
+          </div>
+          <span style={{width:1,height:18,background:border2}}/>
+          <button onClick={xoaNetDangChon} disabled={!dangChon} title="Hoặc bấm phím Delete"
+            style={{...nut(false),opacity:dangChon?1:.4,cursor:dangChon?'pointer':'not-allowed'}}>
+            ✕ Xoá nét đang chọn
+          </button>
+          <button onClick={xoaTatCaNet} disabled={!demNet.tong}
+            style={{...nut(false),opacity:demNet.tong?1:.4,cursor:demNet.tong?'pointer':'not-allowed'}}>
+            🗑 Xoá hết
+          </button>
+          <div style={{flex:1}}/>
+          <span style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600}}>
+            {congCu
+              ? (congCu==='ng'?'Bấm 1 điểm trên biểu đồ để đặt đường ngang'
+                              :'Bấm 2 điểm trên biểu đồ để nối đường xu hướng')
+              : `${demNet.xuHuong} xu hướng · ${demNet.ngang} đường ngang`}
+          </span>
+        </div>
+
         {/* Giá hiện tại */}
         {gia&&(
           <div style={{display:'flex',gap:14,flexWrap:'wrap',alignItems:'baseline',marginBottom:10,
@@ -245,7 +342,9 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           Nguồn: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
           (giờ VN = trừ 1 tiếng; phiên đêm 21:00–01:00 giờ sàn = 20:00–00:00 giờ ta) ·
           quy ước màu <b style={{color:'#16a34a'}}>xanh = tăng</b> / <b style={{color:'#dc2626'}}>đỏ = giảm</b> (ngược app Trung Quốc) ·
-          1 lô {mInfo.lo} tấn. Công cụ vẽ Trendline &amp; Đường ngang sẽ bổ sung ở bước kế tiếp.
+          1 lô {mInfo.lo} tấn. Nét vẽ được lưu trên máy anh: <b>đường ngang</b> dùng chung mọi khung
+          thời gian (mức kháng cự 24.000 nhìn ở khung nào cũng là 24.000), còn <b>đường xu hướng</b>
+          chỉ hiện đúng khung đã vẽ. Chọn một nét rồi bấm <b>Delete</b> để xoá.
         </div>
 
         {/* Tham chiếu chéo với sheet MARKET_PRICES */}
