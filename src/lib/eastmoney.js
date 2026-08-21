@@ -23,6 +23,9 @@ const THI_TRUONG = 113;                    // 113 = SHFE (Sàn Kỳ hạn Thư�
 const TTL_RAM = 3 * 60 * 1000;             // 3 phút
 const TTL_SS = 12 * 60 * 60 * 1000;        // 12 giờ
 const TOI_DA_LUU = 900;                    // số nến lưu vào sessionStorage (tránh đầy quota)
+// Đổi số này mỗi khi sửa cách phân tích dữ liệu → cache cũ tự bị bỏ, không cần
+// người dùng xoá tay. (v1 từng lưu nhầm nến ngày dưới khoá khung giờ.)
+const PB_CACHE = 'v2';
 
 export const MA_NHOM = [
   { ma: 'alm', ten: 'Nhôm Thượng Hải A00', lo: 5,  buocGia: 5 },
@@ -42,6 +45,11 @@ export const KHUNG_TG = [
 
 export const timKhung = (k) => KHUNG_TG.find((x) => x.k === k) || KHUNG_TG[3];
 export const timMa = (m) => MA_NHOM.find((x) => x.ma === m) || MA_NHOM[0];
+
+// KLineChart gọi getBars kèm `period` của chính nó → cần dịch ngược về khung của ta.
+// Mỗi khung ứng với một cặp (type, span) duy nhất nên ánh xạ 1-1, không nhập nhằng.
+export const khungTuPeriod = (p) =>
+  (KHUNG_TG.find((k) => k.period.type === p?.type && k.period.span === p?.span) || KHUNG_TG[3]).k;
 
 // ─── Thời gian ────────────────────────────────────────────────────────────
 // EastMoney trả giờ Bắc Kinh không kèm múi giờ ("2026-08-20 14:30").
@@ -83,9 +91,16 @@ async function goiJSON(url, { signal, lanThu = 3, timeout = 8000 } = {}) {
 // ─── Nhớ tạm ──────────────────────────────────────────────────────────────
 const ram = new Map();
 
+// Dọn cache của các phiên bản trước (khoá 'em:...' không mang đúng phiên bản)
+try {
+  for (const k of Object.keys(sessionStorage)) {
+    if (k.startsWith('em:') && !k.startsWith(`em:${PB_CACHE}:`)) sessionStorage.removeItem(k);
+  }
+} catch { /* chế độ riêng tư / không có sessionStorage */ }
+
 function docSS(khoa) {
   try {
-    const s = sessionStorage.getItem('em:' + khoa);
+    const s = sessionStorage.getItem(`em:${PB_CACHE}:${khoa}`);
     if (!s) return null;
     const g = JSON.parse(s);
     return Date.now() - g.luc < TTL_SS ? g : null;
@@ -93,7 +108,7 @@ function docSS(khoa) {
 }
 function ghiSS(khoa, goi) {
   try {
-    sessionStorage.setItem('em:' + khoa, JSON.stringify({
+    sessionStorage.setItem(`em:${PB_CACHE}:${khoa}`, JSON.stringify({
       ...goi, nen: goi.nen.slice(-TOI_DA_LUU), luc: Date.now(),
     }));
   } catch { /* đầy quota hoặc chế độ riêng tư — bỏ qua, không ảnh hưởng */ }

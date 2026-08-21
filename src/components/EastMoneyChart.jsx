@@ -1,6 +1,6 @@
 import React from 'react';
 const {useState,useEffect,useRef,useCallback}=React;
-import {KHUNG_TG,MA_NHOM,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} from '../lib/eastmoney';
+import {KHUNG_TG,MA_NHOM,khungTuPeriod,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} from '../lib/eastmoney';
 
 // ═══ TAB 📊 BIỂU ĐỒ KỸ THUẬT — nến nhôm SHFE (GĐ2) ═══
 // klinecharts chạm `window` NGAY LÚC IMPORT → phải nạp động trong useEffect,
@@ -8,6 +8,12 @@ import {KHUNG_TG,MA_NHOM,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} fro
 // bundle chính phình thêm ~150 KB dù người dùng chưa mở tab này.
 
 const NHAN_NGUON={mang:'trực tiếp',ram:'nhớ tạm',phien:'phiên trước',tinh:'ảnh chụp tĩnh'};
+
+// Giữ module ở cấp file để lúc dọn dẹp gọi dispose() ĐỒNG BỘ được.
+// Nếu dọn bằng import() (bất đồng bộ) thì lần mount sau đã kịp tạo chart mới
+// trước khi chart cũ bị hủy → thừa pane chỉ báo, rò rỉ instance.
+let _kc=null;
+const napKLine=async()=>(_kc||(_kc=await import('klinecharts')));
 
 export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [ma,setMa]=useState('alm');
@@ -23,6 +29,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const boxRef=useRef(null);
   const chartRef=useRef(null);
   const huyRef=useRef(null);
+  const epTaiRef=useRef(false);   // true = bỏ qua nhớ tạm, gọi thẳng mạng (nút Làm mới)
 
   const kh=timKhung(khungK);
   const mInfo=timMa(ma);
@@ -31,8 +38,11 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   useEffect(()=>{
     let huy=false,chart=null;
     (async()=>{
-      const {init,dispose}=await import('klinecharts');
+      const {init,dispose}=await napKLine();
       if(huy||!boxRef.current) return;
+      // Phòng khi vùng chứa còn chart cũ (hot-reload, mount lại): hủy trước
+      // rồi mới tạo, tránh chồng 2 biểu đồ + 2 pane VOL trùng nhau.
+      try{ dispose(boxRef.current); }catch{}
       chart=init(boxRef.current,{
         locale:'en-US',
         // PHẢI là giờ sàn (Bắc Kinh), KHÔNG phải giờ VN. Nến NGÀY được EastMoney
@@ -58,8 +68,43 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
       });
       if(!chart) return;
       chartRef.current=chart;
-      chart.createIndicator('MA',false,{id:'candle_pane'});
-      chart.createIndicator('VOL');
+      // v10: createIndicator(value, isStack) chỉ có 2 tham số. Muốn đè MA lên
+      // nến phải truyền paneId TRONG object, không phải tham số thứ 3 — trước
+      // đó MA bị đẩy xuống pane riêng nên nhìn như "mất" MA trên biểu đồ nến.
+      chart.createIndicator({name:'MA',paneId:'candle_pane'});
+      chart.createIndicator({name:'VOL'});
+
+      // setDataLoader phải đặt ĐÚNG MỘT LẦN. Nếu gọi lại mỗi lần đổi khung,
+      // KLineChart v10 CỘNG DỒN dữ liệu cũ thay vì thay thế — nến 1 giờ từng
+      // hiện giá ≈ giá thật × 500 (tổng 500 nến ngày trước đó).
+      // Cách đúng: đổi khung = setSymbol()/setPeriod(), để chart tự gọi getBars.
+      chart.setDataLoader({
+        getBars:async({type,symbol,period,callback})=>{
+          if(type!=='init'){ callback([],false); return; }   // không nạp thêm quá khứ
+          const maHT=symbol?.ticker||'alm';
+          const khHT=khungTuPeriod(period);
+          huyRef.current?.abort();
+          const ac=new AbortController(); huyRef.current=ac;
+          setDangTai(true); setLoi(null); setCanhBao(null);
+          try{
+            const g=await layNen(maHT,khHT,{signal:ac.signal,boQuaCache:epTaiRef.current});
+            epTaiRef.current=false;
+            if(ac.signal.aborted) return;
+            // Trong ngày là đường 1 giá/phút → vẽ dạng vùng cho đúng bản chất
+            chart.setStyles({candle:{type:g.kieu==='trongNgay'?'area':'candle_solid'}});
+            callback(g.nen,false);
+            setSoNen(g.nen.length); setNguon(g.nguon); setCanhBao(g.canhBao||null);
+            requestAnimationFrame(()=>chartRef.current?.resize());
+            setTimeout(()=>chartRef.current?.resize(),80);
+          }catch(e){
+            if(!ac.signal.aborted){ callback([],false); setSoNen(0); setLoi(e.message); }
+          }finally{
+            if(!ac.signal.aborted) setDangTai(false);
+          }
+        },
+      });
+      chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
+      chart.setPeriod(timKhung(khungK).period);
       // Canvas của klinecharts giữ nguyên 300x150 nếu vùng chứa chưa có kích
       // thước lúc init (tab vừa mount, layout chưa xong). Ép vẽ lại sau layout.
       requestAnimationFrame(()=>chartRef.current?.resize());
@@ -75,40 +120,27 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
       huy=true;
       ro?.disconnect();
       huyRef.current?.abort();
-      if(chartRef.current){ import('klinecharts').then(({dispose})=>dispose(chartRef.current)).catch(()=>{}); chartRef.current=null; }
+      if(chartRef.current&&_kc){ _kc.dispose(chartRef.current); }
+      chartRef.current=null;
     };
   },[]);
 
-  // ── Nạp dữ liệu mỗi khi đổi mã / khung ──
-  const nap=useCallback(async(boQuaCache=false)=>{
-    huyRef.current?.abort();
-    const ac=new AbortController(); huyRef.current=ac;
-    setDangTai(true); setLoi(null); setCanhBao(null);
-    try{
-      const g=await layNen(ma,khungK,{signal:ac.signal,boQuaCache});
-      if(ac.signal.aborted) return;
-      const chart=chartRef.current;
-      if(chart){
-        chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
-        chart.setPeriod(kh.period);
-        // Trong ngày là đường 1 giá/phút → vẽ dạng vùng cho đúng bản chất
-        chart.setStyles({candle:{type:g.kieu==='trongNgay'?'area':'candle_solid'}});
-        chart.setDataLoader({
-          getBars:({type,callback})=>{
-            callback(type==='init'?g.nen:[],{backward:false,forward:false});
-          },
-        });
-        requestAnimationFrame(()=>chartRef.current?.resize());
-      }
-      setSoNen(g.nen.length); setNguon(g.nguon); setCanhBao(g.canhBao||null);
-    }catch(e){
-      if(!ac.signal.aborted) setLoi(e.message);
-    }finally{
-      if(!ac.signal.aborted) setDangTai(false);
-    }
-  },[ma,khungK,kh.period]);
+  // ── Đổi mã / khung → chỉ báo cho chart, chart tự gọi getBars ở trên ──
+  useEffect(()=>{
+    const chart=chartRef.current;
+    if(!chart) return;                       // lần đầu đã set trong effect khởi tạo
+    chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
+    chart.setPeriod(kh.period);
+  },[ma,kh.period]);
 
-  useEffect(()=>{nap();},[nap]);
+  // ── Nút Làm mới: bỏ qua nhớ tạm rồi ép chart nạp lại ──
+  const lamMoi=useCallback(()=>{
+    const chart=chartRef.current;
+    if(!chart) return;
+    epTaiRef.current=true;
+    chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
+    chart.setPeriod({...kh.period});         // object mới để chart coi là thay đổi
+  },[ma,kh.period]);
 
   // ── Giá hiện tại + trạng thái phiên; làm mới 30 s trong giờ giao dịch ──
   useEffect(()=>{
@@ -146,7 +178,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
                           background:phien.mo?'#f0fdf4':'#fff',color:phien.mo?'#16a34a':'#64748b'}}>
               {phien.mo?'● ':'○ '}{phien.chu}
             </span>
-            <button onClick={()=>nap(true)} style={nut(false)}>↻ Làm mới</button>
+            <button onClick={lamMoi} style={nut(false)}>↻ Làm mới</button>
           </div>
         </div>
 
