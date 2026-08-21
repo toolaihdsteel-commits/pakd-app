@@ -7,8 +7,8 @@ globalThis.alert = () => {}; globalThis.confirm = () => false; globalThis.prompt
 globalThis.fetch = async () => ({ ok: false, status: 599, text: async () => '' });
 const { default: React } = await import('react');
 const { renderToString } = await import('react-dom/server');
-const { App } = await import('./src/App.jsx');
-const { ErrorBoundary } = await import('./src/components/pin.jsx');
+const { App } = await import('../src/App.jsx');
+const { ErrorBoundary } = await import('../src/components/pin.jsx');
 const html = renderToString(React.createElement(ErrorBoundary, null, React.createElement(App)));
 const ok = !html.includes('Đã xảy ra lỗi khi hiển thị');
 console.log('Render length:', html.length, ok ? '✅ App render OK' : '❌ ErrorBoundary caught error');
