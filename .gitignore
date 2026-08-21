@@ -1,0 +1,29 @@
+# Phu thuoc & ban build
+node_modules/
+dist/
+
+# Bien moi truong / bi mat — KHONG BAO GIO commit
+.env
+.env.*
+!.env.example
+*.secret
+gas-config.json
+
+# Ban sao luu thu cong (Git thay the vai tro nay)
+*.bak
+*.bak_*
+*_truncated*
+
+# Rac he dieu hanh & IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# Log & cache
+*.log
+npm-debug.log*
+.vite/
+.cache/

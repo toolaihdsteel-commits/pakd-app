@@ -1,0 +1,17 @@
+# Chuan hoa xuong dong: luu LF trong repo, checkout theo he dieu hanh.
+# Tranh diff rac khi nhieu may Windows/macOS cung sua.
+* text=auto
+
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.mjs   text eol=lf
+*.json  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.yml   text eol=lf
+*.gs    text eol=lf
+*.md    text eol=lf
+
+*.png   binary
+*.xlsx  binary
+*.pdf   binary
