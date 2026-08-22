@@ -74,16 +74,45 @@ async function goi(url, lanThu = 4) {
     } catch (e) {
       loiCuoi = e;
       // EastMoney chặn theo IP vài chục giây → lùi dần khá lâu mới có tác dụng
-      if (i < lanThu - 1) await nghi(4000 * (i + 1));
+      if (i < lanThu - 1) await nghi(6000 * 2 ** i);   // 6s · 12s · 24s
     }
   }
   throw loiCuoi;
 }
 
 fs.mkdirSync(RA, { recursive: true });
+
+// ─── XẾP THỨ TỰ ƯU TIÊN ──────────────────────────────────
+// EastMoney chặn rất sớm: lượt chạy 22/08 trên runner GitHub chỉ 2 request
+// ĐẦU TIÊN lọt (alm_101, alm_102), 5 cái sau chặn sạch. Cứ chạy theo thứ tự
+// cố định thì mãi mãi chỉ 2 file đó tươi, còn alm_60/alm_15/alm_103 không bao
+// giờ được chụp.
+// Cách chữa: mỗi lượt dồn hạn mức ít ỏi vào thứ ĐANG THIẾU trước — file chưa
+// có xếp đầu, rồi tới file cũ nhất; file đã tươi hôm nay thì bỏ qua hẳn.
+// Chạy vài lượt là đủ bộ.
+const homNay = new Date().toISOString().slice(0, 10);
+const EP = process.argv.includes('--ep');   // --ep = chụp lại tất, kể cả file tươi
+
+const doTuoi = (c) => {
+  const f = path.join(RA, `${c.ma}_${c.khung}.json`);
+  if (!fs.existsSync(f)) return { uu: 0, cu: '(chưa có)' };
+  try {
+    const g = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return { uu: g.capNhat === homNay ? 2 : 1, cu: g.capNhat || '?' };
+  } catch { return { uu: 0, cu: '(hỏng)' }; }
+};
+
+const xepHang = CAN_CHUP.map((c) => ({ ...c, ...doTuoi(c) }))
+  .sort((a, b) => a.uu - b.uu || String(a.cu).localeCompare(String(b.cu)));
+const canLam = EP ? xepHang : xepHang.filter((c) => c.uu < 2);
+const boQua = xepHang.length - canLam.length;
+
+console.log(`Thứ tự chụp (thiếu trước, cũ trước): ${canLam.map((c) => c.ma + '_' + c.khung).join(' → ') || '(không có gì)'}`);
+if (boQua) console.log(`Bỏ qua ${boQua} file đã tươi hôm nay (dùng --ep để ép chụp lại).`);
+
 let ok = 0, hong = 0;
 
-for (const c of CAN_CHUP) {
+for (const c of canLam) {
   const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${c.ma}`
     + `&klt=${c.klt}&fqt=0&beg=0&end=20500101&lmt=${c.lmt}`
     + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
@@ -114,9 +143,13 @@ for (const c of CAN_CHUP) {
     console.log(`✗ ${c.ma}_${c.khung}: ${e.message.slice(0, 70)}`);
     hong++;
   }
-  await nghi(3000);   // giãn nhịp để khỏi bị chặn giữa chừng
+  // 3s là quá dày — EastMoney chặn ngay từ request thứ 3. Giãn hẳn ra.
+  await nghi(9000);
 }
 
-console.log(`\n${ok} file OK, ${hong} lỗi`);
+const conThieu = CAN_CHUP.filter((c) => !fs.existsSync(path.join(RA, `${c.ma}_${c.khung}.json`)))
+  .map((c) => `${c.ma}_${c.khung}`);
+console.log(`\n${ok} file OK, ${hong} lỗi, ${boQua} bỏ qua vì đã tươi`);
+if (conThieu.length) console.log(`CÒN THIẾU: ${conThieu.join(', ')} — chạy lại lượt nữa sẽ ưu tiên các file này.`);
 // Không exit(1) khi lỗi lẻ tẻ: đây là lưới an toàn, thiếu 1 file không phải sự cố.
 process.exit(ok === 0 ? 1 : 0);

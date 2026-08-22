@@ -109,6 +109,8 @@ ok('Sheet ghi KP mà app hỏi PE → KHÔNG tự khớp', tim3.i === -1);
 ok('… và báo rõ lệch ô "lớp phủ"', !!tim3.loi && tim3.loi.includes('lớp phủ'),
    tim3.loi ? tim3.loi.split('\n').slice(-2)[0].trim() : '(không có thông báo)');
 ok('… có nêu khoá app gửi để đối chiếu', !!tim3.loi && tim3.loi.includes(khoaChuan));
+ok('… có in dấu phiên bản Apps Script', /\[Apps Script [0-9a-z-]+\]/.test(tim3.loi||''),
+   (tim3.loi||'').split(/\r?\n/)[1]||'');
 
 // ═══ 6. Không tự khớp nhầm sang mã khác ════════════════════════════════
 console.log('\n── Không khớp nhầm mã khác ──');

@@ -69,15 +69,21 @@ async function goiJSON(url, { signal, lanThu = 3, timeout = 8000 } = {}) {
   let loiCuoi;
   for (let i = 0; i < lanThu; i++) {
     const ac = new AbortController();
-    const hetGio = setTimeout(() => ac.abort(), timeout);
+    // Phải đặt LÝ DO khi huỷ. Không đặt thì trình duyệt ném đúng câu
+    // "signal is aborted without reason" — câu này từng hiện thẳng lên màn
+    // hình cho người dùng đọc, chẳng nói lên điều gì.
+    let quaGio = false;
+    const hetGio = setTimeout(() => { quaGio = true; ac.abort(); }, timeout);
     const nhaBo = () => ac.abort();
     signal?.addEventListener('abort', nhaBo);
     try {
       const r = await fetch(url, { signal: ac.signal, cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error('máy chủ trả mã ' + r.status);
       return await r.json();
     } catch (e) {
-      loiCuoi = e;
+      loiCuoi = quaGio
+        ? new Error(`quá ${Math.round(timeout / 1000)} giây không phản hồi`)
+        : (e?.name === 'TypeError' ? new Error('không kết nối được') : e);
       if (signal?.aborted) throw e;                 // người dùng đổi khung → dừng hẳn
       if (i < lanThu - 1) await nghi(800 * 2 ** i + Math.random() * 400);
     } finally {
