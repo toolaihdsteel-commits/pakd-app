@@ -88,6 +88,58 @@ async function goiJSON(url, { signal, lanThu = 3, timeout = 8000 } = {}) {
   throw loiCuoi || new Error('Không gọi được EastMoney');
 }
 
+// ─── Kiểm chứng nến ───────────────────────────────────────────────────────
+// VÌ SAO CẦN: ngày 22/08 file public/market/alm_60.json chứa giá 11.865.139
+// trong khi giá thật ~23.700 (gấp ~500 lần — di chứng của lỗi cộng dồn
+// setDataLoader đã sửa ở GĐ2). Khi EastMoney không phản hồi, biểu đồ lùi về
+// file này và trục giá bị kéo lên 12 triệu → nến bẹp dí thành một vạch, các
+// đường MA dựng đứng. Người dùng thấy "biểu đồ co rúm, méo mó".
+//
+// Chốt chặn: KHÔNG BAO GIỜ đưa nến vô lý cho biểu đồ. Mốc so sánh độc lập là
+// turnover/(volume × số tấn mỗi lô) — ba trường này do EastMoney trả riêng nên
+// một lỗi nhân sai giá sẽ lộ ra ngay. Lệch quá 5 lần = hỏng.
+const BIEN_DO = 5;          // lệch quá 5 lần so với giá suy ra từ giá trị giao dịch
+const TY_LE_HONG = 0.25;    // hỏng quá 25% số nến → coi như cả nguồn hỏng, bỏ hẳn
+
+const trungVi = (a) => {
+  if (!a.length) return null;
+  const b = [...a].sort((x, y) => x - y);
+  return b[b.length >> 1];
+};
+
+/**
+ * Lọc nến vô lý. Trả về { nen, boDi }.
+ * Ném lỗi nếu nguồn hỏng quá nặng — để layNen lùi tiếp xuống lớp dưới thay vì
+ * vẽ ra một biểu đồ sai.
+ */
+export function locNenHopLe(nen, { lo = 5, ten = 'nguồn' } = {}) {
+  const hopLe = [];
+  const boDi = [];
+  // Giá suy ra từ giá trị giao dịch — độc lập hoàn toàn với open/high/low/close
+  const suyRa = [];
+  for (const n of nen) {
+    if (n.volume > 0 && n.turnover > 0) suyRa.push(n.turnover / (n.volume * lo));
+  }
+  const moc = trungVi(suyRa);
+
+  for (const n of nen) {
+    const g = [n.open, n.high, n.low, n.close];
+    if (!g.every((v) => Number.isFinite(v) && v > 0) || n.high < n.low
+        || !Number.isFinite(n.timestamp)) { boDi.push(n); continue; }
+    if (moc != null) {
+      const r = n.close / moc;
+      if (r > BIEN_DO || r < 1 / BIEN_DO) { boDi.push(n); continue; }
+    }
+    hopLe.push(n);
+  }
+
+  if (nen.length && (boDi.length / nen.length > TY_LE_HONG || hopLe.length < 5)) {
+    throw new Error(
+      `dữ liệu ${ten} không hợp lệ (${boDi.length}/${nen.length} nến sai thang giá)`);
+  }
+  return { nen: hopLe, boDi: boDi.length };
+}
+
 // ─── Nhớ tạm ──────────────────────────────────────────────────────────────
 const ram = new Map();
 
@@ -98,12 +150,15 @@ try {
   }
 } catch { /* chế độ riêng tư / không có sessionStorage */ }
 
-function docSS(khoa) {
+function docSS(khoa, lo = 5) {
   try {
     const s = sessionStorage.getItem(`em:${PB_CACHE}:${khoa}`);
     if (!s) return null;
     const g = JSON.parse(s);
-    return Date.now() - g.luc < TTL_SS ? g : null;
+    if (Date.now() - g.luc >= TTL_SS) return null;
+    // Cache phiên có thể đã lưu bản hỏng từ trước khi có locNenHopLe → soi lại.
+    if (g.kieu !== 'trongNgay') locNenHopLe(g.nen || [], { lo, ten: 'dữ liệu phiên trước' });
+    return g;
   } catch { return null; }
 }
 function ghiSS(khoa, goi) {
@@ -133,7 +188,8 @@ async function taiNenK(ma, klt, soNen, signal) {
       volume: so(c[5]) ?? 0, turnover: so(c[6]) ?? 0,
     });
   }
-  return { ten: d.name || ma, nen, kieu: 'nen' };
+  const q = locNenHopLe(nen, { lo: timMa(ma).lo, ten: 'EastMoney' });
+  return { ten: d.name || ma, nen: q.nen, kieu: 'nen' };
 }
 
 // ─── Nguồn 2: đường trong ngày (分时) ──────────────────────────────────────
@@ -161,7 +217,10 @@ async function taiTinh(ma, khungK) {
   if (!r.ok) throw new Error('Chưa có ảnh chụp tĩnh');
   const g = await r.json();
   if (!g?.nen?.length) throw new Error('Ảnh chụp tĩnh rỗng');
-  return { ...g, kieu: khungK === 'trends' ? 'trongNgay' : 'nen' };
+  // Ảnh chụp tĩnh là lớp cuối — nếu nó hỏng thì không còn gì đỡ phía sau, nên
+  // phải soi kỹ nhất. Thà báo "chưa có ảnh chụp" còn hơn vẽ ra giá sai.
+  const q = locNenHopLe(g.nen, { lo: timMa(ma).lo, ten: 'ảnh chụp tĩnh' });
+  return { ...g, nen: q.nen, kieu: khungK === 'trends' ? 'trongNgay' : 'nen' };
 }
 
 // ═══ HÀM CHÍNH ═══════════════════════════════════════════════════════════
@@ -186,20 +245,25 @@ export async function layNen(ma, khungK, { signal, boQuaCache = false } = {}) {
   } catch (e) {
     if (signal?.aborted) throw e;
 
-    const ss = docSS(khoa);
+    // Nói ĐÚNG nguyên nhân: mất kết nối và "trả về số sai" là hai chuyện khác
+    // nhau, cách xử lý cũng khác (chờ vs báo kỹ thuật).
+    const viSao = /không hợp lệ/.test(e.message)
+      ? `EastMoney trả về dữ liệu sai (${e.message})`
+      : `EastMoney không phản hồi (${e.message})`;
+
+    const ss = docSS(khoa, timMa(ma).lo);
     if (ss?.nen?.length) {
-      return { ...ss, nguon: 'phien',
-        canhBao: `EastMoney không phản hồi (${e.message}) — đang dùng dữ liệu đã tải trước đó.` };
+      return { ...ss, nguon: 'phien', canhBao: `${viSao} — đang dùng dữ liệu đã tải trước đó.` };
     }
+    let loiTinh = '';
     try {
       const t = await taiTinh(ma, khungK);
       return { ...t, nguon: 'tinh',
-        canhBao: `EastMoney không phản hồi (${e.message}) — đang dùng ảnh chụp tĩnh${t.capNhat ? ' ngày ' + t.capNhat : ''}.` };
-    } catch {
-      throw new Error(
-        `Không lấy được dữ liệu nến: ${e.message}. `
-        + 'EastMoney thường chặn tạm khi bị gọi quá dày — thử lại sau vài phút.');
-    }
+        canhBao: `${viSao} — đang dùng ảnh chụp tĩnh${t.capNhat ? ' ngày ' + t.capNhat : ''}.` };
+    } catch (e2) { loiTinh = e2.message; }
+    throw new Error(
+      `${viSao}, và khung này chưa có ảnh chụp tĩnh để lùi về (${loiTinh}). `
+      + 'Các khung Ngày / Tuần vẫn xem được. EastMoney thường chặn tạm vài phút rồi mở lại.');
   }
 }
 

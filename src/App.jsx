@@ -1,6 +1,7 @@
 import React from 'react';
 const {useState,useEffect,useRef,useMemo,useCallback,Component}=React;
 import Chart from 'chart.js/auto';
+import {bienTheKhoa,khoaSku,nhanSku} from './lib/chuanhoa';
 import {ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
 import {getCurrentWeekLabel,matchWeekLabel,parseCashFlowCSV} from './lib/cashflow';
 import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
@@ -1347,14 +1348,23 @@ const App=()=>{
     return out;
   },[inventory,poByKey,poTotalRemaining]);
 
+  // ── Payload SKU dùng chung cho mọi lệnh ghi GSheet ──
+  // Gửi kèm khoá ĐÃ CHUẨN HOÁ + danh sách biến thể chấp nhận được, để Apps
+  // Script khớp được dù ô trên sheet ghi "cuộn"/"Coil"/"C", "PE"/"1E", hay
+  // "1,2"/"1.2". Vẫn gửi nguyên 6 trường thô để tương thích bản Apps Script cũ.
+  const skuPayload=useCallback((r)=>({
+    alloy:r.alloy,temper:r.temper,thickness:r.thickness,
+    width:r.width,length:r.length,coating:r.coating,
+    skuKey:khoaSku(r),skuVariants:bienTheKhoa(r),skuText:nhanSku(r),
+  }),[]);
   // ── GĐ2: "✓ Đã xử lý" đề xuất mua (tab Min/Max) — xóa ô yêu cầu mua trên GSheet, có PIN + lưu vết ──
   const handleMarkBuyReqDone=useCallback(async(r)=>{
     if(!window.confirm(`ĐÃ XỬ LÝ đề xuất mua?\n${skuLabel(r)} — yêu cầu: ${r.buyRequest}${r.buyRequestWeek?' ('+r.buyRequestWeek+')':''}\n\nÔ "yêu cầu mua" trên GSheet sẽ bị XÓA (giá trị cũ lưu vết ở tab AUDIT_LOG).`)) return;
     const me=await identifyByPin();
     if(!me) return;
-    const res=await gasCall('markBuyReqDone',{alloy:r.alloy,temper:r.temper,thickness:r.thickness,width:r.width,length:r.length,coating:r.coating},me.name);
+    const res=await gasCall('markBuyReqDone',skuPayload(r),me.name);
     if(res){alert(`✓ ${res.msg}\nNgười xử lý: ${me.name} (đã lưu vết).`);syncGoogleSheet('ms');}
-  },[identifyByPin,gasCall,syncGoogleSheet]);
+  },[identifyByPin,gasCall,syncGoogleSheet,skuPayload]);
   // ── R9: PO 2 chiều ĐẦY ĐỦ — thêm PO nhiều dòng hàng / thêm hàng vào PO sẵn / sửa / xóa dòng / xóa cả PO ──
   const emptyPOItem=()=>({alloy:'A1050',temper:'H14',thickness:'1.0',width:'1200',length:'C',coating:'KP',ordered:'',price:''});
   const [poForm,setPoForm]=useState({open:false,lockHeader:false,po:'',supplier:'',poDate:new Date().toLocaleDateString('vi-VN'),items:[emptyPOItem()]});
@@ -1464,9 +1474,9 @@ const App=()=>{
     if(week===null) return;
     const me=await identifyByPin('🔐 Nhập PIN để ghi ĐỀ XUẤT MUA lên GSheet (định danh + lưu vết):');
     if(!me) return;
-    const res=await gasCall('setBuyRequest',{alloy:r.alloy,temper:r.temper,thickness:r.thickness,width:r.width,length:r.length,coating:r.coating,request:qty,week:(week||'').trim()},me.name);
+    const res=await gasCall('setBuyRequest',{...skuPayload(r),request:qty,week:(week||'').trim()},me.name);
     if(res){alert(`✓ ${res.msg}\nNgười đề xuất: ${me.name} (đã lưu vết AUDIT_LOG).`);syncGoogleSheet('ms');}
-  },[identifyByPin,gasCall,syncGoogleSheet]);
+  },[identifyByPin,gasCall,syncGoogleSheet,skuPayload]);
   // ── GĐ2: cập nhật TL đã giao của 1 dòng PO ngay trong app ──
   const handleUpdatePODelivered=useCallback(async(p)=>{
     const raw=window.prompt(`PO ${p.po} — ${skuLabel(p)}\nTL đặt: ${fv(p.ordered)} kg · Đã giao: ${fv(p.delivered)} kg\n\nNhập TL ĐÃ GIAO mới (kg):`,String(p.delivered||0));

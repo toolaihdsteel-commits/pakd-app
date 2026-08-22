@@ -43,6 +43,103 @@ function skuKey_(o){
   return [norm_(o.alloy), norm_(o.temper), normDim_(o.thickness), normDim_(o.width),
           normDim_(o.length), norm_(o.coating || 'KP')].join('|');
 }
+// ═══ CHUẨN HOÁ DÙNG CHUNG — bản sao của src/lib/chuanhoa.js ═══
+// PHẢI khớp với bản trên trình duyệt. tools/kiem-minmax.mjs so hai bản với
+// nhau; lệch là test đỏ.
+// Lý do tồn tại: khoá SKU ghép từ 6 thành phần nhập tay ở nhiều nơi. Một dấu
+// nhân "×" thay "x", một khoảng trắng NBSP dán từ Excel, hay "cuộn" thay "C"
+// là hai bên ra hai khoá khác nhau → app báo "Không tìm thấy SKU" dù dòng đó
+// đang nằm trên sheet.
+var TRANG_LA_ = /[\u00a0\u1680\u2000-\u200d\u202f\u205f\u3000\ufeff]/g;
+
+function boDau_(s){
+  return String(s == null ? '' : s).replace(TRANG_LA_, ' ')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D');
+}
+function chuanChu_(s){ return boDau_(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+function chuanSo_(v){
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  var t = boDau_(v).trim();
+  if (t === '') return null;
+  t = t.replace(/\s*(mm|kg|m|tan|tons?|ly)\s*$/i, '').trim().replace(/[()]/g, '').trim();
+  if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  else if (/^-?\d{1,3}(,\d{3})+$/.test(t)) t = t.replace(/,/g, '');
+  else t = t.replace(',', '.');
+  t = t.replace(/\s+/g, '');
+  if (!/^-?\d*\.?\d+$/.test(t)) return null;
+  var f = parseFloat(t);
+  return isNaN(f) ? null : f;
+}
+function chuanDo_(v){ var f = chuanSo_(v); return f === null ? chuanChu_(v) : String(f); }
+
+var LA_CUON_ = ['', 'c', 'coil', 'cuon', 'cuoncoil', 'coilc', 'dangcuon', 'cuontron', 'roll'];
+function chuanDai_(v){
+  var t = chuanChu_(v);
+  return LA_CUON_.indexOf(t) >= 0 ? 'C' : chuanDo_(v);
+}
+var LA_PHU_ = ['1e', 'pe', 'yes', 'y', '1', 'true', 'co', 'cophu', 'phu', 'copheu'];
+function chuanPhu_(v){ return LA_PHU_.indexOf(chuanChu_(v)) >= 0 ? '1E' : 'KP'; }
+
+function khoaSku2_(o){
+  return [chuanChu_(o && o.alloy), chuanChu_(o && o.temper), chuanDo_(o && o.thickness),
+          chuanDo_(o && o.width), chuanDai_(o && o.length), chuanPhu_(o && o.coating)].join('|');
+}
+var TEN_PHAN_ = ['mác', 'temper', 'độ dày', 'khổ rộng', 'chiều dài', 'lớp phủ'];
+/** Tên các thành phần LỆCH giữa 2 khoá — để báo cho người dùng biết sửa ô nào. */
+function khacNhauO_(a, b){
+  var x = String(a).split('|'), y = String(b).split('|'), ra = [];
+  for (var i = 0; i < 6; i++) if (x[i] !== y[i]) ra.push(TEN_PHAN_[i] + ' (' + y[i] + ' ≠ ' + x[i] + ')');
+  return ra;
+}
+
+// ═══ TÌM DÒNG SKU TRÊN SHEET MIN/MAX — nhiều tầng + chẩn đoán ═══
+function colsMinMax_(H){
+  return {
+    a: colIdx_(H, ['mac', 'alloy']), t: colIdx_(H, ['temper']),
+    d: colIdx_(H, ['day', 'thickness']), r: colIdx_(H, ['rong', 'width']),
+    l: colIdx_(H, ['dai', 'length']), p: colIdx_(H, ['phu', 'coating']),
+    req: colIdx_(H, ['yeucaumua', 'yeu cau mua']),
+    week: colIdx_(H, ['tuanyeucau', 'tuan yeu cau'])
+  };
+}
+/**
+ * Trả về { i } nếu tìm thấy (i = chỉ số dòng trong data),
+ * hoặc { i:-1, loi:'...' } kèm gợi ý dòng gần đúng.
+ * KHÔNG tự khớp khi lệch lớp phủ — PE và KP là hai mặt hàng khác nhau, đoán
+ * bừa thì ghi nhầm dòng. Thà báo rõ để người dùng sửa ô trên sheet.
+ */
+function timDongSku_(data, C, p){
+  var muon = khoaSku2_(p);
+  var nhan = {};
+  nhan[muon] = 1;
+  if (p.skuKey) nhan[p.skuKey] = 1;
+  var bt = p.skuVariants || [];
+  for (var v = 0; v < bt.length; v++) nhan[bt[v]] = 1;
+
+  var gan = [];
+  for (var i = 1; i < data.length; i++){
+    var row = data[i];
+    if (chuanChu_(row[C.a]) === '') continue;
+    var k = khoaSku2_({ alloy: row[C.a], temper: row[C.t], thickness: row[C.d],
+                        width: row[C.r], length: row[C.l], coating: row[C.p] });
+    if (k === muon || nhan[k]) return { i: i, khoa: k };
+    var kh = khacNhauO_(muon, k);
+    if (kh.length <= 2) gan.push({ dong: i + 1, so: kh.length, lech: kh.join(', ') });
+  }
+  // Xep dong LECH IT NHAT len dau — nguoi dung nhin phat ra ngay o nao sai.
+  gan.sort(function(x, y){ return x.so - y.so; });
+  var msg = 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max.\nKhoá app gửi: ' + muon;
+  if (gan.length){
+    msg += '\nDòng gần giống trên sheet:';
+    for (var j = 0; j < Math.min(3, gan.length); j++)
+      msg += '\n  • dòng ' + gan[j].dong + ' — lệch ' + gan[j].lech;
+    msg += '\n→ Sửa ô lệch trên GSheet rồi bấm Sync.';
+  }
+  return { i: -1, loi: msg };
+}
+
 // tìm chỉ số cột theo danh sách tên ứng viên (đã norm)
 function colIdx_(headers, cands){
   const hs = headers.map(norm_);
@@ -112,28 +209,19 @@ function doPost(e){
 function markBuyReqDone_(p, by){
   const sh = sheetByGid_(GID_MINMAX);
   const data = sh.getDataRange().getValues();
-  const H = data[0];
-  const cA = colIdx_(H, ['mac', 'alloy']), cT = colIdx_(H, ['temper']),
-        cD = colIdx_(H, ['day', 'thickness']), cR = colIdx_(H, ['rong', 'width']),
-        cL = colIdx_(H, ['dai', 'length']), cP = colIdx_(H, ['phu', 'coating']),
-        cReq = colIdx_(H, ['yeucaumua', 'yeu cau mua']),
-        cWeek = colIdx_(H, ['tuanyeucau', 'tuan yeu cau']);
-  if (cReq < 0) return { ok: false, error: 'Sheet Min/Max không có cột yeucaumua' };
+  const C = colsMinMax_(data[0]);
+  if (C.req < 0) return { ok: false, error: 'Sheet Min/Max không có cột yeucaumua' };
 
-  const want = skuKey_(p);
-  for (var i = 1; i < data.length; i++){
-    const row = data[i];
-    const key = skuKey_({ alloy: row[cA], temper: row[cT], thickness: row[cD],
-                          width: row[cR], length: row[cL], coating: coat_(row[cP]) });
-    if (key !== want) continue;
-    const oldReq = row[cReq], oldWeek = cWeek >= 0 ? row[cWeek] : '';
-    if (String(oldReq).trim() === '') return { ok: false, error: 'Mã này không có đề xuất mua (có thể đã xử lý rồi — bấm Sync)' };
-    sh.getRange(i + 1, cReq + 1).clearContent();
-    if (cWeek >= 0) sh.getRange(i + 1, cWeek + 1).clearContent();
-    audit_(by, 'XỬ LÝ ĐỀ XUẤT MUA', skuLabel_(p), 'yêu cầu=' + oldReq + ' tuần=' + oldWeek, '(đã xóa)');
-    return { ok: true, msg: 'Đã xóa đề xuất mua của ' + skuLabel_(p) };
-  }
-  return { ok: false, error: 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max' };
+  const tim = timDongSku_(data, C, p);
+  if (tim.i < 0) return { ok: false, error: tim.loi };
+  const i = tim.i, row = data[i];
+  const oldReq = row[C.req], oldWeek = C.week >= 0 ? row[C.week] : '';
+  if (String(oldReq).trim() === '')
+    return { ok: false, error: 'Mã này không có đề xuất mua (có thể đã xử lý rồi — bấm Sync)' };
+  sh.getRange(i + 1, C.req + 1).clearContent();
+  if (C.week >= 0) sh.getRange(i + 1, C.week + 1).clearContent();
+  audit_(by, 'XỬ LÝ ĐỀ XUẤT MUA', skuLabel_(p), 'yêu cầu=' + oldReq + ' tuần=' + oldWeek, '(đã xóa)');
+  return { ok: true, msg: 'Đã xóa đề xuất mua của ' + skuLabel_(p) + ' (dòng ' + (i + 1) + ')' };
 }
 
 // R6: Sàn duyệt đủ cấp → append vào sheet lich_su_gia_san (1 dòng / nhóm hàng)
@@ -228,29 +316,20 @@ function setCompetitorPrice_(p, by){
 function setBuyRequest_(p, by){
   const sh = sheetByGid_(GID_MINMAX);
   const data = sh.getDataRange().getValues();
-  const H = data[0];
-  const cA = colIdx_(H, ['mac', 'alloy']), cT = colIdx_(H, ['temper']),
-        cD = colIdx_(H, ['day', 'thickness']), cR = colIdx_(H, ['rong', 'width']),
-        cL = colIdx_(H, ['dai', 'length']), cP = colIdx_(H, ['phu', 'coating']),
-        cReq = colIdx_(H, ['yeucaumua', 'yeu cau mua']),
-        cWeek = colIdx_(H, ['tuanyeucau', 'tuan yeu cau']);
-  if (cReq < 0) return { ok: false, error: 'Sheet Min/Max không có cột yeucaumua' };
+  const C = colsMinMax_(data[0]);
+  if (C.req < 0) return { ok: false, error: 'Sheet Min/Max không có cột yeucaumua' };
   const qty = parseFloat(p.request);
   if (isNaN(qty) || qty <= 0) return { ok: false, error: 'Khối lượng đề xuất không hợp lệ' };
-  const want = skuKey_(p);
-  for (var i = 1; i < data.length; i++){
-    const row = data[i];
-    const key = skuKey_({ alloy: row[cA], temper: row[cT], thickness: row[cD],
-                          width: row[cR], length: row[cL], coating: coat_(row[cP]) });
-    if (key !== want) continue;
-    const oldReq = row[cReq], oldWeek = cWeek >= 0 ? row[cWeek] : '';
-    sh.getRange(i + 1, cReq + 1).setValue(qty);
-    if (cWeek >= 0 && p.week) sh.getRange(i + 1, cWeek + 1).setValue(String(p.week));
-    audit_(by, 'ĐỀ XUẤT MUA (' + (String(oldReq).trim() === '' ? 'mới' : 'sửa') + ')', skuLabel_(p),
-           'yêu cầu=' + oldReq + ' tuần=' + oldWeek, 'yêu cầu=' + qty + ' tuần=' + (p.week || oldWeek));
-    return { ok: true, msg: 'Đã ghi đề xuất mua ' + qty + ' kg cho ' + skuLabel_(p) + (p.week ? ' (' + p.week + ')' : '') };
-  }
-  return { ok: false, error: 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max' };
+
+  const tim = timDongSku_(data, C, p);
+  if (tim.i < 0) return { ok: false, error: tim.loi };
+  const i = tim.i, row = data[i];
+  const oldReq = row[C.req], oldWeek = C.week >= 0 ? row[C.week] : '';
+  sh.getRange(i + 1, C.req + 1).setValue(qty);
+  if (C.week >= 0 && p.week) sh.getRange(i + 1, C.week + 1).setValue(String(p.week));
+  audit_(by, 'ĐỀ XUẤT MUA (' + (String(oldReq).trim() === '' ? 'mới' : 'sửa') + ')', skuLabel_(p),
+         'yêu cầu=' + oldReq + ' tuần=' + oldWeek, 'yêu cầu=' + qty + ' tuần=' + (p.week || oldWeek));
+  return { ok: true, msg: 'Đã ghi đề xuất mua ' + qty + ' kg cho ' + skuLabel_(p) + (p.week ? ' (' + p.week + ')' : '') };
 }
 
 // R9: BỘ PO 2 CHIỀU ĐẦY ĐỦ — thêm nhiều dòng / sửa / xóa dòng / xóa cả PO (PIN + AUDIT_LOG)

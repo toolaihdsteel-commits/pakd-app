@@ -60,6 +60,22 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
 
   const capNhatDem=useCallback(()=>setDemNet(demVe(maRef.current,khungRef.current)),[]);
 
+  // ── Toast góc màn hình ──────────────────────────────────────────────────
+  // Trước đây mất mạng là hiện một dải VÀNG to và một dải ĐỎ to đè lên đầu
+  // biểu đồ, đẩy cả trang xuống. Lỗi mạng EastMoney là chuyện thường ngày
+  // (bên đó chặn theo IP khi cả phòng cùng mở app) — nó KHÔNG được phép trông
+  // như sự cố nghiệp vụ. Nay: báo nhẹ ở góc, tự tắt, biểu đồ vẫn chạy bằng
+  // dữ liệu lùi về.
+  const [toasts,setToasts]=useState([]);
+  const soToast=useRef(0);
+  const bao=useCallback((chu,kieu='tin',giay=7)=>{
+    if(!chu) return;
+    const id=++soToast.current;
+    setToasts(t=>[...t.slice(-2),{id,chu,kieu}]);      // giữ tối đa 3 cái
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),giay*1000);
+  },[]);
+  const dongToast=useCallback((id)=>setToasts(t=>t.filter(x=>x.id!==id)),[]);
+
   // ── Khởi tạo biểu đồ 1 lần (nạp động klinecharts) ──
   useEffect(()=>{
     let huy=false,chart=null;
@@ -130,13 +146,17 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
               open:n.open*f,high:n.high*f,low:n.low*f,close:n.close*f}));
             callback(nen,false);
             setSoNen(nen.length); setNguon(g.nguon); setCanhBao(g.canhBao||null);
+            if(g.canhBao) bao(g.canhBao,'nhac');
             // Nét vẽ phải dựng lại SAU khi có nến, vì toạ độ neo theo timestamp
             khoiPhucVe(chart,maHT,khHT,f);
             setDemNet(demVe(maHT,khHT));
             requestAnimationFrame(()=>chartRef.current?.resize());
             setTimeout(()=>chartRef.current?.resize(),80);
           }catch(e){
-            if(!ac.signal.aborted){ callback([],false); setSoNen(0); setLoi(e.message); }
+            if(!ac.signal.aborted){
+              callback([],false); setSoNen(0); setLoi(e.message);
+              bao('Chưa lấy được nến khung này — bấm ↻ Làm mới để thử lại.','loi',9);
+            }
           }finally{
             if(!ac.signal.aborted) setDangTai(false);
           }
@@ -171,6 +191,11 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     if(!chart) return;                       // lần đầu đã set trong effect khởi tạo
     chart.setSymbol({ticker:ma,pricePrecision:0,volumePrecision:0});
     chart.setPeriod(kh.period);
+    // Đổi khung = số nến và biên độ giá đổi hẳn. Ép vẽ lại 2 nhịp (ngay sau
+    // layout, rồi sau khi nến về) để canvas không giữ kích thước của khung cũ.
+    requestAnimationFrame(()=>chartRef.current?.resize());
+    const t=setTimeout(()=>chartRef.current?.resize(),160);
+    return()=>clearTimeout(t);
   },[ma,kh.period]);
 
   // ĐÚNG cách ép nạp lại: gọi lại setDataLoader với CHÍNH loader cũ.
@@ -394,15 +419,13 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           </div>
         )}
 
-        {canhBao&&(
-          <div style={{background:'#fffbeb',border:'1px solid #fde68a',borderLeft:'3px solid #f59e0b',
-                       borderRadius:6,padding:'8px 12px',marginBottom:10,fontSize:'.7rem',
-                       color:'#92400e',fontWeight:600}}>⚠ {canhBao}</div>
-        )}
-        {loi&&(
-          <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderLeft:'3px solid #dc2626',
-                       borderRadius:6,padding:'8px 12px',marginBottom:10,fontSize:'.7rem',
-                       color:'#991b1b',fontWeight:600}}>✕ {loi}</div>
+        {(canhBao||loi)&&(
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,fontSize:'.68rem',
+                       color:'#94a3b8',fontWeight:600}}>
+            <span>{loi?'○':'●'}</span>
+            <span>{loi||canhBao}</span>
+            {loi&&<button onClick={lamMoi} style={{...nut(false),padding:'2px 8px'}}>↻ Thử lại</button>}
+          </div>
         )}
 
         {/* Khung vẽ KLineChart */}
@@ -452,6 +475,28 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
         )}
 
       </div>
+
+      {/* Toast góc phải dưới — báo nhẹ, tự tắt, không đẩy layout */}
+      {toasts.length>0&&(
+        <div style={{position:'fixed',right:16,bottom:16,zIndex:60,display:'flex',
+                     flexDirection:'column',gap:8,maxWidth:'min(380px,90vw)'}}>
+          {toasts.map(t=>{
+            const m=t.kieu==='loi'?{vien:'#fca5a5',nen:'#fef2f2',chu:'#991b1b',bieu:'✕'}
+                   :t.kieu==='nhac'?{vien:'#fcd34d',nen:'#fffbeb',chu:'#92400e',bieu:'⚠'}
+                   :{vien:'#bae6fd',nen:'#f0f9ff',chu:'#075985',bieu:'ℹ'};
+            return (
+              <div key={t.id} onClick={()=>dongToast(t.id)} title="Bấm để đóng"
+                   style={{display:'flex',gap:8,alignItems:'flex-start',cursor:'pointer',
+                           background:m.nen,border:`1px solid ${m.vien}`,borderRadius:8,
+                           padding:'9px 12px',fontSize:'.7rem',fontWeight:600,color:m.chu,
+                           boxShadow:'0 4px 14px rgba(15,23,42,.12)'}}>
+                <span style={{flexShrink:0}}>{m.bieu}</span>
+                <span style={{lineHeight:1.45}}>{t.chu}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

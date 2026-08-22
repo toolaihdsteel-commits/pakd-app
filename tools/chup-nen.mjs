@@ -34,6 +34,27 @@ const CAN_CHUP = [
 const nghi = (ms) => new Promise((r) => setTimeout(r, ms));
 const so = (v) => { const f = parseFloat(v); return isNaN(f) ? null : f; };
 
+// Số tấn mỗi lô — để suy ra giá từ giá trị giao dịch (mốc kiểm chứng độc lập)
+const LO = { alm: 5, aom: 20, adm: 10 };
+
+// CHỐT CHẶN: ngày 22/08 file alm_60.json đã được ghi ra với giá 11.865.139
+// (giá thật ~23.700). Trình duyệt lùi về file đó và biểu đồ bị kéo trục lên 12
+// triệu — nến bẹp thành một vạch. Từ nay KHÔNG ghi file nếu nến không qua kiểm.
+function kiemNen(nen, lo) {
+  const suyRa = nen.filter((n) => n.volume > 0 && n.turnover > 0)
+                   .map((n) => n.turnover / (n.volume * lo)).sort((a, b) => a - b);
+  if (!suyRa.length) return { ok: true, sai: 0 };     // trends2 không có turnover
+  const moc = suyRa[suyRa.length >> 1];
+  let sai = 0;
+  for (const n of nen) {
+    const g = [n.open, n.high, n.low, n.close];
+    if (!g.every((v) => Number.isFinite(v) && v > 0) || n.high < n.low) { sai++; continue; }
+    const r = n.close / moc;
+    if (r > 5 || r < 1 / 5) sai++;
+  }
+  return { ok: sai / nen.length <= 0.02, sai, moc: Math.round(moc) };
+}
+
 // EastMoney trả giờ Bắc Kinh không kèm múi giờ → phải ghim +08:00
 function sangMoc(s) {
   const t = String(s).trim();
@@ -81,6 +102,8 @@ for (const c of CAN_CHUP) {
     // beg=0 khiến EastMoney bỏ qua lmt (alm trả về 6.713 nến ~733 KB).
     // Đây là file LÙI VỀ tải qua mạng — phải gọn, nên cắt lấy phần gần nhất.
     if (nen.length > c.lmt) nen = nen.slice(-c.lmt);
+    const k = kiemNen(nen, LO[c.ma] || 5);
+    if (!k.ok) throw new Error(`nến sai thang giá (${k.sai}/${nen.length}, mốc ~${k.moc}) — KHÔNG ghi đè file cũ`);
     fs.writeFileSync(f, JSON.stringify({
       ten: d.name || c.ma, ma: c.ma, khung: c.khung, nen,
       capNhat: new Date().toISOString().slice(0, 10),

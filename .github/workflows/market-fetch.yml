@@ -64,3 +64,34 @@ jobs:
           print('Apps Script trả về:', resp)
           assert '"ok":true' in resp.replace(' ', ''), 'Apps Script báo lỗi!'
           EOF
+
+  # ── Chụp nến EastMoney thành file tĩnh trong public/market/ ──────────────
+  # LƯỚI AN TOÀN cho tab 📊 Biểu đồ Kỹ thuật. EastMoney chặn theo IP (22/08 cả
+  # push2 lẫn push2his đều 502/đứt từ máy văn phòng). Runner GitHub đi IP khác
+  # nên thường lấy được; nến chụp về là thứ trình duyệt lùi vào khi mất mạng.
+  #
+  # chup-nen.mjs TỰ KIỂM trước khi ghi: lệch quá 5 lần so với giá suy ra từ
+  # turnover/volume là bỏ, không ghi đè file cũ. Đây chính là lỗi ngày 21/08 —
+  # alm_60.json bị ghi giá 11.865.139 (giá thật ~23.700) làm vỡ biểu đồ.
+  chup-nen:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Chụp nến
+        run: node tools/chup-nen.mjs
+      - name: Commit nếu có thay đổi
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/market/
+          if git diff --cached --quiet; then
+            echo "Không có nến mới — bỏ qua."
+          else
+            git commit -m "chore(market): cập nhật ảnh chụp nến EastMoney"
+            git push
+          fi
