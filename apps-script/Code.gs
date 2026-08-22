@@ -78,7 +78,13 @@ function chuanSo_(v){
   var f = parseFloat(t);
   return isNaN(f) ? null : f;
 }
-function chuanDo_(v){ var f = chuanSo_(v); return f === null ? chuanChu_(v) : String(f); }
+function chuanDo_(v){
+  // Ô bị Sheets đổi thành ngày: trả về dạng đọc được thay vì chuỗi Date thô
+  // ("sunfeb012026000000gmt0700giodongduong") — vẫn không khớp với số, nhưng
+  // người dùng đọc thông báo là hiểu ngay ô nào sai.
+  if (laNgay_(v)) return 'ngay:' + taNgay_(v);
+  var f = chuanSo_(v); return f === null ? chuanChu_(v) : String(f);
+}
 
 var LA_CUON_ = ['', 'c', 'coil', 'cuon', 'cuoncoil', 'coilc', 'dangcuon', 'cuontron', 'roll'];
 function chuanDai_(v){
@@ -87,6 +93,26 @@ function chuanDai_(v){
 }
 var LA_PHU_ = ['1e', 'pe', 'yes', 'y', '1', 'true', 'co', 'cophu', 'phu', 'copheu'];
 function chuanPhu_(v){ return LA_PHU_.indexOf(chuanChu_(v)) >= 0 ? '1E' : 'KP'; }
+
+// Ô KÍCH THƯỚC BỊ GOOGLE SHEETS ĐỔI THÀNH NGÀY THÁNG
+// Gõ "1.2" vào ô định dạng Tự động thì Sheets hiểu là ngày 1 tháng 2 và lưu
+// thành Date. Trên màn hình vẫn hiện "1.2", bản xuất CSV cũng ra "1.2" — nên
+// nhìn bằng mắt hoàn toàn không phát hiện được. Nhưng getValues() trả về
+// đúng cái Date đó, nên khoá SKU ra "sunfeb012026..." và không bao giờ khớp.
+// Đây chính là thủ phạm vụ A3003 H14 1.2×1250×cuộn ngày 22/08.
+function laNgay_(v){ return Object.prototype.toString.call(v) === '[object Date]'; }
+function taNgay_(v){
+  if (!laNgay_(v)) return '';
+  return Utilities.formatDate(v, Session.getScriptTimeZone(), 'd/M/yyyy');
+}
+/** Tên các cột kích thước đang giữ Date trong một dòng. */
+function oNgayTrongDong_(row, C){
+  var ra = [];
+  if (laNgay_(row[C.d])) ra.push('độ dày → ' + taNgay_(row[C.d]));
+  if (laNgay_(row[C.r])) ra.push('khổ rộng → ' + taNgay_(row[C.r]));
+  if (C.l >= 0 && laNgay_(row[C.l])) ra.push('chiều dài → ' + taNgay_(row[C.l]));
+  return ra;
+}
 
 function khoaSku2_(o){
   return [chuanChu_(o && o.alloy), chuanChu_(o && o.temper), chuanDo_(o && o.thickness),
@@ -124,7 +150,7 @@ function timDongSku_(data, C, p){
   var bt = p.skuVariants || [];
   for (var v = 0; v < bt.length; v++) nhan[bt[v]] = 1;
 
-  var gan = [];
+  var gan = [], oNgay = [];
   for (var i = 1; i < data.length; i++){
     var row = data[i];
     if (chuanChu_(row[C.a]) === '') continue;
@@ -132,12 +158,20 @@ function timDongSku_(data, C, p){
                         width: row[C.r], length: row[C.l], coating: row[C.p] });
     if (k === muon || nhan[k]) return { i: i, khoa: k };
     var kh = khacNhauO_(muon, k);
+    var ngay = oNgayTrongDong_(row, C);
+    if (ngay.length) oNgay.push({ dong: i + 1, o: ngay.join(', ') });
     if (kh.length <= 2) gan.push({ dong: i + 1, so: kh.length, lech: kh.join(', ') });
   }
   // Xep dong LECH IT NHAT len dau — nguoi dung nhin phat ra ngay o nao sai.
   gan.sort(function(x, y){ return x.so - y.so; });
   var msg = 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max.'
     + '\n[Apps Script ' + PHIEN_BAN + '] Khoá app gửi: ' + muon;
+  if (oNgay.length){
+    msg += '\n\n⚠ Ô KÍCH THƯỚC ĐANG LÀ NGÀY THÁNG (Sheets tự đổi "1.2" thành ngày 1/2):';
+    for (var z = 0; z < Math.min(5, oNgay.length); z++)
+      msg += '\n  • dòng ' + oNgay[z].dong + ': ' + oNgay[z].o;
+    msg += '\n  Sửa: bôi đen cột → Định dạng → Số → Văn bản thuần tuý → gõ lại giá trị.';
+  }
   if (gan.length){
     msg += '\nDòng gần giống trên sheet:';
     for (var j = 0; j < Math.min(3, gan.length); j++)
@@ -214,6 +248,28 @@ function doPost(e){
 }
 
 // Đánh dấu đề xuất mua ĐÃ XỬ LÝ = XÓA ô "yêu cầu mua" + "tuần yêu cầu" (giữ vết trong AUDIT_LOG)
+/**
+ * RÀ SOÁT CẢ SHEET MIN/MAX: liệt kê mọi ô kích thước đang bị lưu thành NGÀY.
+ * Chạy tay từ editor Apps Script: chọn hàm soatONgay → Run → xem Execution log.
+ * Dùng để sửa MỘT LẦN cho hết, thay vì mỗi lần bấm nút mới lộ ra một ô.
+ */
+function soatONgay(){
+  const data = sheetByGid_(GID_MINMAX).getDataRange().getValues();
+  const C = colsMinMax_(data[0]);
+  const loi = [];
+  for (var i = 1; i < data.length; i++){
+    if (chuanChu_(data[i][C.a]) === '') continue;
+    const o = oNgayTrongDong_(data[i], C);
+    if (o.length) loi.push('  dòng ' + (i + 1) + ' [' + data[i][C.a] + ' ' + data[i][C.t] + ']: ' + o.join(', '));
+  }
+  const ra = loi.length
+    ? 'Có ' + loi.length + ' dòng bị ô kích thước lưu thành NGÀY:\n' + loi.join('\n')
+      + '\n\nSửa: bôi đen cột → Định dạng → Số → Văn bản thuần tuý → gõ lại giá trị.'
+    : 'Không có ô kích thước nào bị lưu thành ngày — sheet Min/Max sạch.';
+  Logger.log(ra);
+  return ra;
+}
+
 function markBuyReqDone_(p, by){
   const sh = sheetByGid_(GID_MINMAX);
   const data = sh.getDataRange().getValues();

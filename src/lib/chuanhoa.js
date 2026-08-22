@@ -54,6 +54,10 @@ export function chuanSo(v) {
 
 /** Số về dạng khoá: 2.0 → "2", 1.20 → "1.2". Không phải số thì chuẩnChu. */
 export function chuanDo(v) {
+  // Giữ đồng bộ với bản Apps Script: ô bị Google Sheets đổi thành ngày thì
+  // trả dạng đọc được, không phải chuỗi Date thô.
+  if (Object.prototype.toString.call(v) === '[object Date]')
+    return `ngay:${v.getDate()}/${v.getMonth() + 1}/${v.getFullYear()}`;
   const f = chuanSo(v);
   return f == null ? chuanChu(v) : String(f);
 }
