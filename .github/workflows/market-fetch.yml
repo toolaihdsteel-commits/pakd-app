@@ -8,11 +8,20 @@ name: Fetch market prices (plan B)
 
 on:
   schedule:
-    - cron: '5 5 * * *'   # 05:05 UTC = 12:05 trưa VN
+    - cron: '5 5 * * *'    # 12:05 trưa VN — lấy giá + chụp nến
+    # EastMoney chặn theo IP sau chỉ 1–2 request. Một lượt chạy dài không
+    # bao giờ lấy đủ 7 file. Đổi chiến thuật: NHIỀU LƯỢT NGẮN, mỗi lượt
+    # vớt vài file còn thiếu (chup-nen.mjs đã xếp thiếu-trước). File đã tươi
+    # trong ngày thì bỏ qua, nên các lượt sau khi đủ bộ gần như không tốn gì.
+    - cron: '0 */4 * * *'  # mỗi 4 giờ — CHỈ chụp nến, không đụng tới giá
   workflow_dispatch:
 
 jobs:
+  # Lấy giá SMM/LME/SHFE rồi POST vào Apps Script — MỖI NGÀY MỘT LẦN là đủ.
+  # Chạy 6 lần/ngày sẽ ghi đè sheet MARKET_PRICES liên tục, vô ích và gây nhiễu
+  # lịch sử. Nên job này chỉ theo lượt 12:05 (hoặc khi bấm chạy tay).
   fetch:
+    if: github.event_name != 'schedule' || github.event.schedule == '5 5 * * *'
     runs-on: ubuntu-latest
     steps:
       - name: Fetch prices & push to Apps Script

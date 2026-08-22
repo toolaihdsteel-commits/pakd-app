@@ -533,6 +533,34 @@ const App=()=>{
       return data;
     }catch(e){alert('❌ Lỗi gọi Apps Script:\n'+e.message);return null;}
   },[gasConfig]);
+  // ── Kiểm tra Apps Script đang chạy BẢN NÀO ───────────────────────
+  // Ngày 22/08 mất hai vòng UAT vì tưởng đã deploy bản mới nhưng Web App vẫn
+  // phục vụ code cũ. Hai cái bẫy chồng nhau:
+  //   1. Bấm "New deployment" trong Apps Script sinh ra URL /exec MỚI.
+  //   2. App KHÔNG dùng URL gõ tay — nó đọc config/gas.json trên repo
+  //      pakd-data và GHI ĐÈ mỗi lần tải (xem R5 ngay dưới).
+  // => Deploy đúng nhưng app vẫn gọi URL cũ, không có cách nào nhìn ra.
+  // Nút này hỏi thẳng endpoint ĐANG DÙNG: "anh là bản nào?" — và chạy được
+  // cả khi đầu kia còn là bản cũ (bản cũ không biết action 'version' nên
+  // trả về 'Action không hợp lệ' — chính là câu trả lời ta cần).
+  const [gasVer,setGasVer]=useState(null);
+  const kiemTraGas=useCallback(async()=>{
+    const url=(gasConfig.url||'').trim();
+    if(!url){setGasVer({kieu:'loi',chu:'Chưa có Web App URL.'});return;}
+    const ma=(url.match(/\/s\/([^/]+)\//)||[])[1]||'';
+    const dinhDanh=ma?('…'+ma.slice(-14)):'(không đọc được mã deployment)';
+    setGasVer({kieu:'cho',chu:'Đang hỏi…',ma:dinhDanh});
+    try{
+      const res=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify({secret:gasConfig.secret||'',action:'version'})});
+      const d=await res.json();
+      if(d.ok&&d.phienBan) setGasVer({kieu:'moi',chu:'BẢN MỚI đang chạy — '+d.phienBan,ma:dinhDanh});
+      else if(/mã bí mật/i.test(d.error||'')) setGasVer({kieu:'loi',
+        chu:'Sai mã bí mật — URL này trỏ tới một project Apps Script KHÁC.',ma:dinhDanh});
+      else setGasVer({kieu:'cu',
+        chu:'URL này đang chạy BẢN CŨ — cần Deploy → Manage deployments → ✎ → Version: New version.',ma:dinhDanh});
+    }catch(e){ setGasVer({kieu:'loi',chu:'Không gọi được URL này: '+e.message,ma:dinhDanh}); }
+  },[gasConfig.url,gasConfig.secret]);
   // R6: Sàn được duyệt đủ cấp → tự append vào GSheet sheet lich_su_gia_san (gid 1612937978).
   // Chạy NỀN: lỗi/chưa cấu hình Apps Script chỉ console.warn, KHÔNG chặn luồng duyệt (GitHub vẫn là nguồn chính).
   const pushFloorHistoryToSheet=useCallback(async(entry,by)=>{
@@ -4107,6 +4135,7 @@ URL.revokeObjectURL(url);
                 <div style={{marginTop:8}}><label className="lbl">Mã bí mật (SECRET)</label><input type="password" className="inp" placeholder="trùng Script properties → SECRET" value={gasConfig.secret||''} onChange={e=>setGasConfig(p=>({...p,secret:e.target.value.trim()}))} style={{fontFamily:'JetBrains Mono',fontSize:'.72rem'}}/></div>
                 <div style={{display:'flex',gap:8,marginTop:8,justifyContent:'flex-end'}}>
                   <button className="btn btn-ghost btn-sm" onClick={async()=>{const r=await gasCall('ping',{},'test');if(r)alert('✓ '+(r.msg||'Kết nối OK'));}}>📡 Test kết nối</button>
+                  <button className="btn btn-ghost btn-sm" onClick={kiemTraGas} title="Hỏi thẳng Web App xem nó đang chạy bản code nào">🔎 Kiểm tra phiên bản</button>
                   <button className="btn btn-success btn-sm" onClick={async()=>{
                     saveGasConfig(gasConfig);
                     if(ghVerified&&gasConfig.url){
@@ -4120,6 +4149,21 @@ URL.revokeObjectURL(url);
                     } else alert('✓ Đã lưu cấu hình Apps Script (trong trình duyệt này).');
                   }}>💾 Lưu dùng chung</button>
                 </div>
+                {gasVer&&(()=>{
+                  const m=gasVer.kieu==='moi'?{n:'#f0fdf4',v:'#86efac',c:'#15803d',b:'✓'}
+                         :gasVer.kieu==='cu'?{n:'#fffbeb',v:'#fcd34d',c:'#92400e',b:'⚠'}
+                         :gasVer.kieu==='cho'?{n:'#f8fafc',v:'#cbd5e1',c:'#64748b',b:'⏳'}
+                         :{n:'#fef2f2',v:'#fca5a5',c:'#991b1b',b:'✕'};
+                  return (
+                    <div style={{marginTop:8,background:m.n,border:'1px solid '+m.v,borderRadius:6,
+                                 padding:'8px 10px',fontSize:'.7rem',fontWeight:700,color:m.c,lineHeight:1.5}}>
+                      <div>{m.b} {gasVer.chu}</div>
+                      {gasVer.ma&&<div style={{fontFamily:'JetBrains Mono',fontSize:'.64rem',fontWeight:600,marginTop:3,opacity:.8}}>
+                        deployment đang dùng: {gasVer.ma}
+                      </div>}
+                    </div>
+                  );
+                })()}
               </div>
               {/* Quản lý người duyệt (Việc 1) */}
               <div style={{marginTop:14,paddingTop:14,borderTop:'2px dashed #cbd5e1'}}>

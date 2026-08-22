@@ -25,8 +25,13 @@ const bang = (ten, thuc, mong) => ok(ten, thuc === mong, thuc === mong ? '' : `�
 
 // ── Nạp bản Apps Script để so với bản trình duyệt ────────────────────────
 const src = fs.readFileSync(new URL('../apps-script/Code.gs', import.meta.url), 'utf8');
-const GS = new Function(
-  `${src}\nreturn { khoaSku2_, timDongSku_, colsMinMax_, chuanDai_, chuanPhu_, skuLabel_ };`)();
+// Code.gs gọi Utilities/Session khi gặp ô kiểu Date — hai thứ này chỉ có trên
+// Apps Script. Dựng bản giả tối thiểu để chạy được dưới Node.
+const Utilities = { formatDate: (d) => `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}` };
+const Session = { getScriptTimeZone: () => 'Asia/Ho_Chi_Minh' };
+const GS = new Function('Utilities', 'Session',
+  `${src}\nreturn { khoaSku2_, timDongSku_, colsMinMax_, chuanDai_, chuanPhu_, skuLabel_, laNgay_ };`
+)(Utilities, Session);
 
 // ═══ 1. Mặt hàng đang lỗi, viết theo mọi kiểu người ta hay gõ ═══════════
 console.log('── Mã đang lỗi: A3003 H14 PE 1.2×1250×cuộn(mm) ──');
@@ -120,6 +125,25 @@ ok('Mã dày 3.0 khớp đúng dòng 3.0 (không nhảy sang 1.2)', timKhac.i ==
 const khongCo = { alloy: 'A6061', temper: 'T6', thickness: '5.0', width: '1500', length: 'C', coating: 'KP' };
 ok('Mã không có trên sheet → trượt đúng cách',
    GS.timDongSku_([H, ...DONG], C, { ...khongCo, skuKey: khoaSku(khongCo) }).i === -1);
+
+// ═══ 7. Ô KÍCH THƯỚC BỊ SHEETS ĐỔI THÀNH NGÀY — lỗi thật ngày 22/08 ═══
+// Gõ "1.2" vào ô định dạng Tự động thì Sheets lưu thành Date(1/2/2026).
+// Màn hình vẫn hiện "1.2", CSV xuất ra cũng "1.2" — nhìn bằng mắt và đối chiếu
+// bằng CSV ĐỀU KHÔNG THẤY. Chỉ getValues() mới lộ ra. Phải báo cho người
+// dùng bằng tiếng người, không được in ra "sunfeb012026000000gmt0700...".
+console.log('\n── Ô độ dày bị lưu thành NGÀY (lỗi thật 22/08) ──');
+const DONG_NGAY = DONG.map((r, i) => (i === 4 ? [...r.slice(0, 3), new Date(2026, 1, 1), ...r.slice(4)] : r));
+ok('Sheets lưu Date → đúng là không khớp được', GS.laNgay_(DONG_NGAY[4][3]) === true);
+const timN = GS.timDongSku_([H, ...DONG_NGAY], C, payload);
+ok('Không tự đoán bừa thành 1.2', timN.i === -1);
+ok('Báo rõ "Ô KÍCH THƯỚC ĐANG LÀ NGÀY THÁNG"',
+   (timN.loi || '').includes('NGÀY THÁNG'));
+ok('Chỉ đích danh dòng và cột sai',
+   /dòng 6: độ dày → 1\/2\/2026/.test(timN.loi || ''),
+   (timN.loi || '').split('\n').filter((x) => x.includes('độ dày →'))[0] || '(không có)');
+ok('Có hướng dẫn sửa định dạng ô', (timN.loi || '').includes('Văn bản thuần tuý'));
+ok('Không phun chuỗi Date thô ra cho người dùng đọc',
+   !/sunfeb|gmt\+?0?700|giodongduong/i.test(timN.loi || ''));
 
 console.log(hong ? `\n${hong} phép kiểm SAI` : '\nToàn bộ phép kiểm ĐÚNG');
 process.exit(hong ? 1 : 0);

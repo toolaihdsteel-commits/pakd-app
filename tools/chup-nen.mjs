@@ -110,37 +110,75 @@ const boQua = xepHang.length - canLam.length;
 console.log(`Thứ tự chụp (thiếu trước, cũ trước): ${canLam.map((c) => c.ma + '_' + c.khung).join(' → ') || '(không có gì)'}`);
 if (boQua) console.log(`Bỏ qua ${boQua} file đã tươi hôm nay (dùng --ep để ép chụp lại).`);
 
-let ok = 0, hong = 0;
+
+// ─── NHIỀU BIẾN THỂ THAM SỐ, ĐỂ BỘ KIỂM TỰ CHỌN CÁI ĐÚNG ───────────
+// Log 22/08 lo ra một sự thật khác hẳn điều tôi tưởng: request alm_60 ĐÃ TỚI
+// được EastMoney, và chính EastMoney trả về 120/124 nến có giá ~11.865.000
+// trong khi giá thật ~23.700. Tám nến mới nhất (cùng ngày) thì đúng.
+// Mẫu đó đúng với chuỗi HỢP ĐỒNG LIÊN TỤC (沪铝主连): mỗi lần đáo hạn là nối
+// sang tháng mới, và hệ số quy đổi của các lần nối nhân dồn lại — phần
+// lịch sử bị thổi lên, phần mới nhất (chưa nối lần nào) vẫn sạch.
+//
+// Không đoán được tham số nào đúng khi không gọi được EastMoney để thử.
+// Nhưng ta ĐÃ CÓ bộ kiểm độc lập (turnover/volume) — cứ thử lần lượt và giữ
+// cái ĐẦU TIÊN qua được kiểm. Để dữ liệu tự chỉ ra tham số đúng.
+const BIEN_THE = [
+  { ten: 'fqt=0',          q: 'fqt=0&beg=0&end=20500101' },
+  { ten: 'fqt=1 (nối tiếp)', q: 'fqt=1&beg=0&end=20500101' },
+  { ten: 'fqt=2 (nối lùi)',  q: 'fqt=2&beg=0&end=20500101' },
+  { ten: 'không beg',       q: 'fqt=0&end=20500101' },
+];
+
+function docNen(d, lmt) {
+  let nen = [];
+  for (const dong of d.klines) {
+    const x = dong.split(',');
+    const ts = sangMoc(x[0]);
+    if (ts == null) continue;
+    nen.push({ timestamp: ts, open: so(x[1]), close: so(x[2]), high: so(x[3]),
+               low: so(x[4]), volume: so(x[5]) ?? 0, turnover: so(x[6]) ?? 0 });
+  }
+  // beg=0 khiến EastMoney bỏ qua lmt (alm trả về 6.713 nến ~733 KB).
+  // Đây là file LÙI VỀ tải qua mạng — phải gọn, nên cắt lấy phần gần nhất.
+  return nen.length > lmt ? nen.slice(-lmt) : nen;
+}
+
+let ok = 0, hong = 0, chan = 0;
 
 for (const c of canLam) {
-  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${c.ma}`
-    + `&klt=${c.klt}&fqt=0&beg=0&end=20500101&lmt=${c.lmt}`
-    + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
   const f = path.join(RA, `${c.ma}_${c.khung}.json`);
-  try {
-    const d = (await goi(url)).data;
-    if (!d?.klines?.length) throw new Error('không có nến');
-    let nen = [];
-    for (const dong of d.klines) {
-      const x = dong.split(',');
-      const ts = sangMoc(x[0]);
-      if (ts == null) continue;
-      nen.push({ timestamp: ts, open: so(x[1]), close: so(x[2]), high: so(x[3]),
-                 low: so(x[4]), volume: so(x[5]) ?? 0, turnover: so(x[6]) ?? 0 });
+  const lo = LO[c.ma] || 5;
+  let dat = null, ghiChu = [];
+
+  for (const bt of BIEN_THE) {
+    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${c.ma}`
+      + `&klt=${c.klt}&${bt.q}&lmt=${c.lmt}`
+      + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
+    try {
+      const d = (await goi(url, 2)).data;      // 2 lần thôi — còn biến thể khác để thử
+      if (!d?.klines?.length) throw new Error('không có nến');
+      const nen = docNen(d, c.lmt);
+      const k = kiemNen(nen, lo);
+      if (!k.ok) { ghiChu.push(`${bt.ten}: sai thang giá ${k.sai}/${nen.length}`); await nghi(4000); continue; }
+      dat = { nen, ten: d.name || c.ma, bt: bt.ten };
+      break;
+    } catch (e) {
+      const chanIP = /Command failed|phản hồi rỗng/i.test(e.message);
+      ghiChu.push(`${bt.ten}: ${chanIP ? 'bị chặn' : e.message.slice(0, 40)}`);
+      if (chanIP) { chan++; break; }           // bị chặn thì thử biến thể nữa cũng vô ích
+      await nghi(4000);
     }
-    // beg=0 khiến EastMoney bỏ qua lmt (alm trả về 6.713 nến ~733 KB).
-    // Đây là file LÙI VỀ tải qua mạng — phải gọn, nên cắt lấy phần gần nhất.
-    if (nen.length > c.lmt) nen = nen.slice(-c.lmt);
-    const k = kiemNen(nen, LO[c.ma] || 5);
-    if (!k.ok) throw new Error(`nến sai thang giá (${k.sai}/${nen.length}, mốc ~${k.moc}) — KHÔNG ghi đè file cũ`);
+  }
+
+  if (dat) {
     fs.writeFileSync(f, JSON.stringify({
-      ten: d.name || c.ma, ma: c.ma, khung: c.khung, nen,
-      capNhat: new Date().toISOString().slice(0, 10),
+      ten: dat.ten, ma: c.ma, khung: c.khung, nen: dat.nen,
+      capNhat: new Date().toISOString().slice(0, 10), thamSo: dat.bt,
     }));
-    console.log(`✓ ${c.ma}_${c.khung}: ${nen.length} nến → ${(fs.statSync(f).size / 1024).toFixed(0)} KB`);
+    console.log(`✓ ${c.ma}_${c.khung}: ${dat.nen.length} nến (${dat.bt}) → ${(fs.statSync(f).size / 1024).toFixed(0)} KB`);
     ok++;
-  } catch (e) {
-    console.log(`✗ ${c.ma}_${c.khung}: ${e.message.slice(0, 70)}`);
+  } else {
+    console.log(`✗ ${c.ma}_${c.khung}: ${ghiChu.join(' · ')}`);
     hong++;
   }
   // 3s là quá dày — EastMoney chặn ngay từ request thứ 3. Giãn hẳn ra.
@@ -152,4 +190,9 @@ const conThieu = CAN_CHUP.filter((c) => !fs.existsSync(path.join(RA, `${c.ma}_${
 console.log(`\n${ok} file OK, ${hong} lỗi, ${boQua} bỏ qua vì đã tươi`);
 if (conThieu.length) console.log(`CÒN THIẾU: ${conThieu.join(', ')} — chạy lại lượt nữa sẽ ưu tiên các file này.`);
 // Không exit(1) khi lỗi lẻ tẻ: đây là lưới an toàn, thiếu 1 file không phải sự cố.
-process.exit(ok === 0 ? 1 : 0);
+// KHÔNG exit(1) khi bị chặn. Đây là lưới an toàn chạy nền, EastMoney chặn IP là
+// chuyện thường ngày và không phải lỗi của ta — để job đỏ mỗi ngày thì chỉ tạo
+// nhiễu, rồi đến lúc đỏ thật lại không ai nhìn. Dùng ::warning:: cho hiện ở
+// trang tóm tắt mà không làm hỏng lượt chạy.
+if (conThieu.length) console.log(`::warning::Chưa chụp được: ${conThieu.join(', ')}`);
+process.exit(0);
