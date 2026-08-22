@@ -87,7 +87,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # BUOC MO KHOA: bot github-actions[bot] KHONG the them vao Bypass list cua
+      # ruleset (repo ca nhan chi cho Roles/Deploy keys). Cach kha thi duy nhat:
+      # push bang PAT cua chu repo -> nguoi day la admin -> khop muc bypass
+      # "Repository admin" da them. Tao secret ten PUSH_NEN (fine-grained PAT,
+      # Contents: Read and write, chi repo nay). Chua co secret thi fallback
+      # github.token — luc do push se bi ruleset chan nhu cu.
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PUSH_NEN || github.token }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -105,9 +113,11 @@ jobs:
             if git push; then
               echo "Đã cập nhật ảnh chụp nến lên main."
             else
-              echo "::error::Luật bảo vệ nhánh đang chặn bot ghi vào main — ảnh chụp nến vừa lấy được đã BỊ BỎ."
-              echo "::error::Sửa: Settings → Rules → ruleset của main → Bypass list → Add bypass → chọn Repository admin (hoặc GitHub Actions)."
-              echo "::error::Không thêm bypass thì job này không bao giờ lưu được nến, dù tải về thành công."
+              echo "::error::Luật bảo vệ nhánh đang chặn ghi vào main — ảnh chụp nến vừa lấy được đã BỊ BỎ."
+              echo "::error::Cần secret PUSH_NEN: tạo fine-grained PAT (Contents: Read and write, chỉ repo này)"
+              echo "::error::tại Settings cá nhân → Developer settings → Fine-grained tokens, rồi lưu vào"
+              echo "::error::repo Settings → Secrets and variables → Actions → New repository secret, tên PUSH_NEN."
+              echo "::error::Kèm điều kiện: ruleset main phải có Repository admin trong Bypass list (đã thêm 22/08)."
               exit 1
             fi
           fi
