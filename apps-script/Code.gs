@@ -865,6 +865,14 @@ function testMarketSources(){
 // App đọc giá: GET <url>?action=market&secret=...  → {ok, rows:[{date,lme_usd,...}]} (mới nhất TRƯỚC)
 function doGet(e){
   const p = (e && e.parameter) || {};
+  // KIỂM TRA PHIÊN BẢN — trả lời TRƯỚC bước hỏi mã bí mật.
+  // Chuỗi phiên bản không phải bí mật, mà để sau mã bí mật thì phải dán
+  // secret vào thanh địa chỉ — nó sẽ nằm lại trong lịch sử trình duyệt.
+  // Nhờ vậy chỉ cần dán <URL /exec>?action=version vào một tab là biết
+  // Web App đang chạy bản nào, không cần đợi app deploy:
+  //   bản MỚI → {"ok":true,"phienBan":"..."}
+  //   bản CŨ → {"ok":false,"error":"Sai mã bí mật"}  (vì nó hỏi secret trước)
+  if (p.action === 'version') return json_({ ok: true, msg: 'Apps Script ' + PHIEN_BAN, phienBan: PHIEN_BAN });
   if (p.secret !== props_().getProperty('SECRET')) return json_({ ok: false, error: 'Sai mã bí mật' });
   if (p.action === 'market'){
     const sh = ss_().getSheetByName(MARKET_SHEET);
