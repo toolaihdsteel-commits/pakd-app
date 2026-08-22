@@ -43,6 +43,12 @@ function skuKey_(o){
   return [norm_(o.alloy), norm_(o.temper), normDim_(o.thickness), normDim_(o.width),
           normDim_(o.length), norm_(o.coating || 'KP')].join('|');
 }
+// DẤU PHIÊN BẢN — in ra trong mọi thông báo lỗi.
+// Ngày 22/08 đã mất một vòng UAT vì tưởng đã deploy bản mới nhưng Web App vẫn
+// chạy code cũ (bấm "New deployment" sinh URL MỚI, app vẫn gọi URL cũ).
+// Nhìn con số này trong thông báo là biết ngay bản nào đang chạy.
+const PHIEN_BAN = '2026-08-22b';
+
 // ═══ CHUẨN HOÁ DÙNG CHUNG — bản sao của src/lib/chuanhoa.js ═══
 // PHẢI khớp với bản trên trình duyệt. tools/kiem-minmax.mjs so hai bản với
 // nhau; lệch là test đỏ.
@@ -130,7 +136,8 @@ function timDongSku_(data, C, p){
   }
   // Xep dong LECH IT NHAT len dau — nguoi dung nhin phat ra ngay o nao sai.
   gan.sort(function(x, y){ return x.so - y.so; });
-  var msg = 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max.\nKhoá app gửi: ' + muon;
+  var msg = 'Không tìm thấy SKU ' + skuLabel_(p) + ' trong sheet Min/Max.'
+    + '\n[Apps Script ' + PHIEN_BAN + '] Khoá app gửi: ' + muon;
   if (gan.length){
     msg += '\nDòng gần giống trên sheet:';
     for (var j = 0; j < Math.min(3, gan.length); j++)
@@ -197,7 +204,8 @@ function doPost(e){
       const n = x => { const f = parseFloat(x); return isNaN(f) ? null : f; };
       return json_(writeMarketRow_({ lme: n(p.lme), shfe: n(p.shfe), smm: n(p.smm), smmMove: n(p.smmMove), usd: n(p.usd), cny: n(p.cny) }));
     }
-    return json_({ ok: false, error: 'Action không hợp lệ: ' + body.action });
+    if (body.action === 'version')           return json_({ ok: true, msg: 'Apps Script ' + PHIEN_BAN, phienBan: PHIEN_BAN });
+    return json_({ ok: false, error: 'Action không hợp lệ: ' + body.action + ' [Apps Script ' + PHIEN_BAN + ']' });
   } catch (err){
     return json_({ ok: false, error: String(err && err.message || err) });
   } finally {
