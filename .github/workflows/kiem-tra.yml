@@ -1,0 +1,42 @@
+# Chạy bộ kiểm chứng trên MỌI nhánh và mọi Pull Request — trừ main (main đã
+# được deploy.yml kiểm rồi, chạy nữa là thừa).
+#
+# Mục đích: bắt lỗi khi code còn ở nhánh tính năng, TRƯỚC khi gộp vào main.
+# Gộp vào main là tự động lên trang thật, nên phải chặn từ đây.
+name: Kiểm chứng mã nguồn
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kiem-tra-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kiem-tra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      # tdz     : bắt lỗi biến dùng trước khi khai báo trong App.jsx
+      # smoke   : render toàn app phía máy chủ, ErrorBoundary không được bắt lỗi
+      # smoke-tabs: render riêng các tab đã tách khỏi App.jsx
+      # kiem-lopphu: kiểm phần toán của đường SMM (quy đổi VAT, liền mạch)
+      # vite build: đóng gói thật
+      - name: Kiểm chứng
+        run: npm run verify

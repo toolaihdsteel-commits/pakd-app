@@ -1,17 +1,25 @@
-# Tự động build Vite + deploy GitHub Pages mỗi khi push lên main.
-# Yêu cầu 1 lần duy nhất: vào repo Settings → Pages → Source: "GitHub Actions".
+# Tự động build và xuất bản GitHub Pages mỗi khi push lên main.
+#
+# ⚠ YÊU CẦU MỘT LẦN DUY NHẤT — PHẢI LÀM TRƯỚC KHI PUSH MÃ NGUỒN LÊN main:
+#     Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   Nếu vẫn để "Deploy from a branch" thì bước deploy sẽ báo lỗi, và tệ hơn là
+#   Pages sẽ phục vụ thẳng mã nguồn (index.html trỏ /src/main.jsx) → trang trắng.
+#
+# Quy trình: kiểm chứng → build → xuất bản. Build hỏng thì DỪNG, không đẩy lên
+# trang thật. Trước đây phải build ở máy rồi upload tay thư mục dist.
 name: Build & Deploy GitHub Pages
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:        # cho phép bấm chạy tay từ tab Actions
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# Đang deploy dở mà có push mới thì huỷ lượt cũ, tránh 2 bản chồng nhau
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -21,15 +29,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm install
-      - run: npm run build
+          cache-dependency-path: package-lock.json
+
+      # npm ci (không phải npm install): cài đúng y package-lock.json,
+      # bản trên máy và bản trên CI giống hệt nhau.
+      - name: Cài phụ thuộc
+        run: npm ci
+
+      # Cổng chặn: TDZ + render 4 tab + kiểm toán đường SMM + build.
+      # Sai bất kỳ bước nào là job dừng, trang thật giữ nguyên bản cũ.
+      - name: Kiểm chứng và build
+        run: npm run verify
+
+      - name: Kiểm tra kết quả build
+        run: |
+          test -f dist/index.html || { echo "::error::Thiếu dist/index.html"; exit 1; }
+          grep -q '/pakd-app/assets/' dist/index.html \
+            || { echo "::error::index.html không trỏ tới /pakd-app/ — sai cấu hình base trong vite.config.js"; exit 1; }
+          echo "Kích thước bản build:"; du -sh dist
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
