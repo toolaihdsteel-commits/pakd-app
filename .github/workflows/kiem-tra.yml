@@ -27,10 +27,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
+      # npm ci ĐÒI package-lock.json khớp tuyệt đối. Bẫy đã dính ngày 22/08:
+      # vite-node@6 phụ thuộc vite ^8 nên npm cài LỒNG một vite@8 + esbuild@0.28
+      # bên trong, rồi npm 11 (máy Windows) ghi thiếu các gói nền tảng của bản
+      # esbuild lồng đó. Máy mình npm ci chạy ngon, CI dùng npm 10 thì đỏ:
+      #   "Missing: @esbuild/linux-x64@0.28.2 from lock file"
+      # Cách chặn: vite-node phải CÙNG ĐỜI với vite (vite 5 → vite-node 2).
+      # Đổi bản vite thì phải đổi vite-node theo, rồi dựng lại package-lock.json.
       - run: npm ci
 
       # tdz     : bắt lỗi biến dùng trước khi khai báo trong App.jsx

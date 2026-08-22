@@ -28,6 +28,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^29.1.1",
     "vite": "^5.4.11",
-    "vite-node": "^6.0.0"
+    "vite-node": "^2.1.9"
   }
 }
