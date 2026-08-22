@@ -122,12 +122,42 @@ if (boQua) console.log(`Bỏ qua ${boQua} file đã tươi hôm nay (dùng --ep 
 // Không đoán được tham số nào đúng khi không gọi được EastMoney để thử.
 // Nhưng ta ĐÃ CÓ bộ kiểm độc lập (turnover/volume) — cứ thử lần lượt và giữ
 // cái ĐẦU TIÊN qua được kiểm. Để dữ liệu tự chỉ ra tham số đúng.
-const BIEN_THE = [
-  { ten: 'fqt=0',          q: 'fqt=0&beg=0&end=20500101' },
-  { ten: 'fqt=1 (nối tiếp)', q: 'fqt=1&beg=0&end=20500101' },
-  { ten: 'fqt=2 (nối lùi)',  q: 'fqt=2&beg=0&end=20500101' },
-  { ten: 'không beg',       q: 'fqt=0&end=20500101' },
-];
+// ĐÃ CÓ CÂU TRẢ LỜI cho chuyện fqt (lượt chạy 22/08, job #12):
+//   alm_60: fqt=0 sai 120/124 · fqt=1 sai 120/124 · fqt=2 sai 120/124 · không beg sai 120/124
+//   alm_15: cả bốn đều sai 384/400
+// Bốn biến thể ra ĐÚNG CÙNG MỘT con số → fqt không ảnh hưởng gì. Thử tiếp là
+// ném 8 request vào sọt rác mỗi lượt, trong khi EastMoney chỉ cho vài request.
+//
+// Cùng lượt đó: alm_103 (tháng), aom_101, adm_101 đều qua kiểm ngay lần đầu.
+// => Ngày/tuần/tháng LÀNH, riêng khung TRONG NGÀY của mã liên tục thì HỎNG.
+//
+// Đọc được từ đó: "alm" là chuỗi HỢP ĐỒNG LIÊN TỤC (沪铝主连) — nối nhiều
+// tháng lại với nhau. Phần lịch sử bị quy đổi sai, chỉ vài nến mới nhất
+// (thuộc hợp đồng hiện hành, chưa nối lần nào) là đúng.
+// => Với khung trong ngày, thử thẳng MÃ HỢP ĐỒNG CỤ THỂ (al + YYMM) thay vì mã
+// liên tục. Không chắc mã nào đang niêm yết nên thử vài tháng gần — đoán bừa
+// ở đây AN TOÀN vì bộ kiểm turnover/volume chặn ở cổng: mã sai thì không có
+// nến hoặc không qua kiểm, không đời nào ghi ra file sai.
+function maHopDongGan(n = 4) {
+  const d = new Date(), ra = [];
+  for (let k = 0; k < n; k++) {
+    const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + k, 1));
+    ra.push('al' + String(t.getUTCFullYear()).slice(2) + String(t.getUTCMonth() + 1).padStart(2, '0'));
+  }
+  return ra;
+}
+
+/** Danh sách (mã, tham số) sẽ thử cho một mục tiêu. */
+function bienThe(c) {
+  const trongNgay = c.klt < 101;
+  // Ngày/tuần/tháng: lần đầu luôn đúng — một request là đủ, đừng phí hạn mức.
+  if (!trongNgay) return [{ ten: 'fqt=0', ma: c.ma, q: 'fqt=0&beg=0&end=20500101' }];
+  // Trong ngày: thử mã liên tục một lần (phòng khi EastMoney sửa), rồi tới
+  // các hợp đồng cụ thể.
+  const ra = [{ ten: `${c.ma} (liên tục)`, ma: c.ma, q: 'fqt=0&beg=0&end=20500101' }];
+  if (c.ma === 'alm') for (const m of maHopDongGan()) ra.push({ ten: m, ma: m, q: 'fqt=0&beg=0&end=20500101' });
+  return ra;
+}
 
 function docNen(d, lmt) {
   let nen = [];
@@ -150,8 +180,8 @@ for (const c of canLam) {
   const lo = LO[c.ma] || 5;
   let dat = null, ghiChu = [];
 
-  for (const bt of BIEN_THE) {
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${c.ma}`
+  for (const bt of bienThe(c)) {
+    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${bt.ma}`
       + `&klt=${c.klt}&${bt.q}&lmt=${c.lmt}`
       + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
     try {

@@ -102,5 +102,12 @@ jobs:
             echo "Không có nến mới — bỏ qua."
           else
             git commit -m "chore(market): cập nhật ảnh chụp nến EastMoney"
-            git push
+            if git push; then
+              echo "Đã cập nhật ảnh chụp nến lên main."
+            else
+              echo "::error::Luật bảo vệ nhánh đang chặn bot ghi vào main — ảnh chụp nến vừa lấy được đã BỊ BỎ."
+              echo "::error::Sửa: Settings → Rules → ruleset của main → Bypass list → Add bypass → chọn Repository admin (hoặc GitHub Actions)."
+              echo "::error::Không thêm bypass thì job này không bao giờ lưu được nến, dù tải về thành công."
+              exit 1
+            fi
           fi
