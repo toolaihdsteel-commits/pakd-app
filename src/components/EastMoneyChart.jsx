@@ -2,7 +2,7 @@ import React from 'react';
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 import {KHUNG_TG,MA_NHOM,khungTuPeriod,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} from '../lib/eastmoney';
 import {CONG_CU,KIEU_VE,demVe,khoiPhucVe,luuVe,xoaHet} from '../lib/vekythuat';
-import {CHI_BAO_LOP_PHU,KHUNG_CO_LOP_PHU,NGUON,VAT_TQ,dungTraCuu,layNhomVatTu,taoDsCIF,taoDsSan,taoTraSMM} from '../lib/lopphu';
+import {CHI_BAO_SMM,KHUNG_CO_SMM,NGUON,VAT_TQ,dungTraCuu,taoTraSMM,vungCoSMM} from '../lib/lopphu';
 
 // ═══ TAB 📊 BIỂU ĐỒ KỸ THUẬT — nến nhôm SHFE (GĐ2) ═══
 // klinecharts chạm `window` NGAY LÚC IMPORT → phải nạp động trong useEffect,
@@ -17,10 +17,9 @@ const NHAN_NGUON={mang:'trực tiếp',ram:'nhớ tạm',phien:'phiên trước'
 let _kc=null;
 const napKLine=async()=>(_kc||(_kc=await import('klinecharts')));
 
-const TEN_LOP_PHU=CHI_BAO_LOP_PHU.map(c=>c.name);
 let _daDangKy=false;   // registerIndicator là toàn cục, chỉ đăng ký 1 lần
 
-export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[],bg1,bg2,border2})=>{
+export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [ma,setMa]=useState('alm');
   const [khungK,setKhungK]=useState('101');
   const [dangTai,setDangTai]=useState(true);
@@ -33,9 +32,8 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
   const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng'
   const [demNet,setDemNet]=useState({ngang:0,xuHuong:0,tong:0});
   const [dangChon,setDangChon]=useState(null);// id nét đang chọn (để xoá bằng phím Delete)
-  const [hienLopPhu,setHienLopPhu]=useState(true);
+  const [hienSMM,setHienSMM]=useState(true);
   const [bocVat,setBocVat]=useState(true);    // mặc định BẬT — xem mục VAT trong lopphu.js
-  const [nhomSan,setNhomSan]=useState('');
 
   const boxRef=useRef(null);
   const chartRef=useRef(null);
@@ -54,13 +52,11 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
   maRef.current=ma; khungRef.current=khungK;
   const heSoVat=bocVat?1/(1+VAT_TQ):1;
   vatRef.current=heSoVat;
-  const khungHoTro=KHUNG_CO_LOP_PHU.includes(khungK);
-  const batLopPhu=hienLopPhu&&khungHoTro;
+  const khungHoTro=KHUNG_CO_SMM.includes(khungK);
+  const batSMM=hienSMM&&khungHoTro;
 
-  const dsNhom=useMemo(()=>layNhomVatTu(floorHistory),[floorHistory]);
   const traCuu=useMemo(()=>dungTraCuu(marketData),[marketData]);
-  // Nhóm mặc định = nhóm có sản lượng mua lớn nhất
-  useEffect(()=>{ if(!nhomSan&&dsNhom.length) setNhomSan(dsNhom[0].nhan); },[dsNhom,nhomSan]);
+  const vung=useMemo(()=>vungCoSMM(traCuu),[traCuu]);
 
   const capNhatDem=useCallback(()=>setDemNet(demVe(maRef.current,khungRef.current)),[]);
 
@@ -71,7 +67,7 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
       const kc=await napKLine();
       const {init,dispose,registerIndicator}=kc;
       // series:'price' -> chỉ báo dùng CHUNG thang giá với nến, không cần trục phụ
-      if(!_daDangKy){ CHI_BAO_LOP_PHU.forEach(c=>registerIndicator(c)); _daDangKy=true; }
+      if(!_daDangKy){ registerIndicator(CHI_BAO_SMM); _daDangKy=true; }
       if(huy||!boxRef.current) return;
       // Phòng khi vùng chứa còn chart cũ (hot-reload, mount lại): hủy trước
       // rồi mới tạo, tránh chồng 2 biểu đồ + 2 pane VOL trùng nhau.
@@ -105,7 +101,7 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
       // nến phải truyền paneId TRONG object, không phải tham số thứ 3 — trước
       // đó MA bị đẩy xuống pane riêng nên nhìn như "mất" MA trên biểu đồ nến.
       // Tham số thứ 2 isStack=true BẮT BUỘC: mặc định false khiến chỉ báo mới
-      // THAY THẾ chỉ báo cũ trên cùng pane (MA từng bị SMM đè, rồi CIF đè SMM).
+      // THAY THẾ chỉ báo cũ trên cùng pane (MA từng bị SMM đè mất).
       chart.createIndicator({name:'MA',paneId:'candle_pane'},true);
       chart.createIndicator({name:'VOL'});
 
@@ -127,7 +123,7 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
             if(ac.signal.aborted) return;
             // Trong ngày là đường 1 giá/phút → vẽ dạng vùng cho đúng bản chất
             chart.setStyles({candle:{type:g.kieu==='trongNgay'?'area':'candle_solid'}});
-            // Bóc VAT: chia nến cho 1,13 để khoảng hở tới CIF là premium thuần.
+            // Bóc VAT: chia nến cho 1,13 để đọc theo mặt bằng không thuế.
             // KHÔNG đụng volume/turnover — chỉ giá mới chịu thuế.
             const f=vatRef.current;
             const nen=f===1?g.nen:g.nen.map(n=>({...n,
@@ -200,29 +196,22 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
     napLai();
   },[napLai]);
 
-  // ── Lớp phủ nghiệp vụ: SMM · CIF · Giá sàn ───────────────────────────
+  // ── Đường SMM giao ngay ───────────────────────────────────────────────
   useEffect(()=>{
     const chart=chartRef.current;
     if(!chart) return;
     // Nạp dữ liệu vào NGUON trước, vì calc của chỉ báo đọc từ đó (registerIndicator
     // là hàm toàn cục nên callback không bắt được state của React).
     NGUON.traSMM=taoTraSMM(traCuu,bocVat);
-    NGUON.dsCIF=taoDsCIF(allRawImportPrices,traCuu,'ALL');
-    NGUON.dsSan=taoDsSan(floorHistory,nhomSan,traCuu);
-    NGUON.nhanSan=nhomSan;
-
     chart.removeIndicator({name:'SMM'});
-    chart.removeIndicator({name:'CIF'});
-    chart.removeIndicator({name:'SAN'});
-    if(!batLopPhu) return;
-    TEN_LOP_PHU.forEach(n=>chart.createIndicator({name:n,paneId:'candle_pane'},true));
+    if(!batSMM||!traCuu.length) return;
+    chart.createIndicator({name:'SMM',paneId:'candle_pane'},true);
 
-    // Tự thu vùng nhìn về ~400 phiên gần nhất để dồn trọng tâm vào vùng có
-    // số liệu nghiệp vụ (nến có tới 6.713 phiên, lớp phủ chỉ ~400 ngày).
-    // Chỉ ĐẶT LẠI khoảng cách nến, KHÔNG khoá — người dùng vẫn lướt/zoom tự do.
+    // Thu vùng nhìn về đúng khoảng có số liệu SMM để nhìn ra basis cho rõ.
+    // Chỉ ĐẶT LẠI khoảng cách nến, KHÔNG khoá — vẫn lướt/zoom tự do.
     const w=chart.getSize('candle_pane')?.width;
-    if(w>0){ chart.setBarSpace(Math.max(1,w/400)); chart.scrollToRealTime(); }
-  },[batLopPhu,bocVat,nhomSan,traCuu,allRawImportPrices,floorHistory,soNen]);
+    if(w>0){ chart.setBarSpace(Math.max(1,w/Math.min(400,Math.max(60,traCuu.length)))); chart.scrollToRealTime(); }
+  },[batSMM,bocVat,traCuu,soNen]);
 
   // ── Công cụ vẽ ────────────────────────────────────────────────────────
   const chonCongCu=useCallback((t)=>{
@@ -337,34 +326,24 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
           </span>
         </div>
 
-        {/* Lớp phủ nghiệp vụ */}
+        {/* Đường SMM giao ngay */}
         <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center',marginBottom:10,
                      background:bg2,border:`1px solid ${border2}`,borderRadius:8,padding:'8px 10px'}}>
-          <label style={{display:'flex',alignItems:'center',gap:5,fontSize:'.7rem',fontWeight:800,cursor:'pointer'}}>
-            <input type="checkbox" checked={hienLopPhu} onChange={e=>setHienLopPhu(e.target.checked)}/>
-            Lớp phủ nghiệp vụ
+          <label style={{display:'flex',alignItems:'center',gap:5,fontSize:'.7rem',fontWeight:800,cursor:'pointer'}}
+                 title="Vẽ đè giá giao ngay SMM lên nến SHFE để nhìn ra basis">
+            <input type="checkbox" checked={hienSMM} onChange={e=>setHienSMM(e.target.checked)}/>
+            <span style={{color:'#ea580c'}}>━</span> Đường SMM giao ngay
           </label>
-          <span style={{fontSize:'.66rem',fontWeight:700,color:'#ea580c'}}>━ SMM</span>
-          <span style={{fontSize:'.66rem',fontWeight:700,color:'#16a34a'}}>● CIF</span>
-          <span style={{fontSize:'.66rem',fontWeight:700,color:'#7c3aed'}}>┄ Giá sàn</span>
           <span style={{width:1,height:18,background:border2}}/>
           <label style={{display:'flex',alignItems:'center',gap:5,fontSize:'.7rem',fontWeight:800,cursor:'pointer'}}
-                 title="SHFE và SMM là giá gồm VAT 13% Trung Quốc; CIF thì không. Bóc ra thì khoảng hở mới là premium thuần.">
+                 title="SHFE và SMM đều là giá gồm VAT 13% Trung Quốc. Bóc ra để đọc theo mặt bằng không thuế.">
             <input type="checkbox" checked={bocVat} onChange={e=>setBocVat(e.target.checked)}/>
             Bóc VAT 13%
           </label>
-          <span style={{width:1,height:18,background:border2}}/>
-          <span style={{fontSize:'.68rem',fontWeight:700,color:'#475569'}}>Nhóm sàn:</span>
-          <select value={nhomSan} onChange={e=>setNhomSan(e.target.value)} disabled={!dsNhom.length}
-                  style={{fontSize:'.7rem',fontWeight:700,padding:'3px 7px',borderRadius:5,
-                          border:`1px solid ${border2}`,maxWidth:280}}>
-            {dsNhom.length
-              ? dsNhom.map(n=><option key={n.nhan} value={n.nhan}>{n.nhan}{n.sanLuong?` (${Math.round(n.sanLuong).toLocaleString('vi-VN')} kg)`:''}</option>)
-              : <option value="">— chưa có lịch sử giá sàn —</option>}
-          </select>
           <div style={{flex:1}}/>
           <span style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600}}>
-            {bocVat?'Trục giá: CNY/tấn — ĐÃ bóc VAT':'Trục giá: CNY/tấn — GỒM VAT'}
+            {vung?`SMM có số liệu ${vung.tu} → ${vung.den} (${vung.soNgay} ngày)`:'Chưa có số liệu SMM'}
+            {' · '}{bocVat?'trục: CNY/tấn đã bóc VAT':'trục: CNY/tấn gồm VAT'}
           </span>
         </div>
 
@@ -429,11 +408,11 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
         {/* Khung vẽ KLineChart */}
         <div style={{position:'relative',background:'#fff',border:`1px solid ${border2}`,borderRadius:8}}>
           <div ref={boxRef} style={{width:'100%',height:480}}/>
-          {hienLopPhu&&!khungHoTro&&(
+          {hienSMM&&!khungHoTro&&(
             <div style={{position:'absolute',left:12,bottom:10,zIndex:2,pointerEvents:'none',
                          background:'rgba(255,255,255,.86)',border:`1px solid ${border2}`,borderRadius:5,
                          padding:'4px 9px',fontSize:'.64rem',fontWeight:600,color:'#94a3b8'}}>
-              Các chỉ báo CIF/SMM/Giá sàn đã ẩn trên khung thời gian nhỏ
+              Đường SMM đã ẩn trên khung thời gian nhỏ (SMM là số liệu theo ngày)
             </div>
           )}
           {dangTai&&(
@@ -447,7 +426,8 @@ export const EastMoneyChart=({marketData=[],allRawImportPrices=[],floorHistory=[
           Nguồn: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
           (giờ VN = trừ 1 tiếng; phiên đêm 21:00–01:00 giờ sàn = 20:00–00:00 giờ ta) ·
           quy ước màu <b style={{color:'#16a34a'}}>xanh = tăng</b> / <b style={{color:'#dc2626'}}>đỏ = giảm</b> (ngược app Trung Quốc) ·
-          1 lô {mInfo.lo} tấn. Nét vẽ được lưu trên máy anh: <b>đường ngang</b> dùng chung mọi khung
+          1 lô {mInfo.lo} tấn. Đường <b style={{color:'#ea580c'}}>SMM</b> là giá nhôm giao ngay Trung Quốc —
+          khoảng hở giữa nó và nến SHFE chính là <b>basis</b>. Nét vẽ lưu trên máy anh: <b>đường ngang</b> dùng chung mọi khung
           thời gian (mức kháng cự 24.000 nhìn ở khung nào cũng là 24.000), còn <b>đường xu hướng</b>
           chỉ hiện đúng khung đã vẽ. Chọn một nét rồi bấm <b>Delete</b> để xoá.
         </div>
