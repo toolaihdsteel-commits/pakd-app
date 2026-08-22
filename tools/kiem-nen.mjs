@@ -74,7 +74,7 @@ ok('Giữ nguyên 30 nến lành', r4.nen.length === 30);
 // ═══ 4. Không bắt nhầm hàng lành ═══════════════════════════════════════
 console.log('\n── Không bắt nhầm (mỗi mã một cỡ lô) ──');
 const RA = fileURLToPath(new URL('../public/market/', import.meta.url));
-for (const [f, lo] of [['alm_101.json', 5], ['alm_102.json', 5], ['aom_101.json', 20], ['adm_101.json', 10]]) {
+for (const [f, lo] of [['alm_101.json', 5], ['alm_102.json', 5], ['alm_103.json', 5], ['aom_101.json', 20], ['adm_101.json', 10]]) {
   const duong = path.join(RA, f);
   if (!fs.existsSync(duong)) { console.log(`   (bỏ qua ${f} — chưa có)`); continue; }
   const g = JSON.parse(fs.readFileSync(duong, 'utf8'));
@@ -124,6 +124,14 @@ let loi60 = null;
 try { await layNen('alm', '60'); } catch (e) { loi60 = e.message; }
 ok('Báo lỗi rõ ràng thay vì vẽ nến sai', !!loi60, loi60);
 ok('Không lộ dữ liệu 11 triệu ra biểu đồ', !/11\d{6}/.test(String(loi60)));
+
+// ═══ 7. Khung 15 phút / 1 giờ phải ở trạng thái ẨN (kết luận 22/08) ═════
+console.log('\n── Khung trong ngày bị ẩn vì nguồn trả sai lịch sử ──');
+const { KHUNG_TG } = await import('../src/lib/eastmoney.js');
+ok('15 phút và 1 giờ mang cờ an:true',
+   KHUNG_TG.filter((k) => k.an).map((k) => k.k).sort().join(',') === '15,60');
+ok('Trong ngày / Ngày / Tuần / Tháng vẫn hiện',
+   KHUNG_TG.filter((k) => !k.an).map((k) => k.k).join(',') === 'trends,101,102,103');
 
 console.log(hong ? `\n${hong} phép kiểm SAI` : '\nToàn bộ phép kiểm ĐÚNG');
 process.exit(hong ? 1 : 0);

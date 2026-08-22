@@ -341,7 +341,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
             {MA_NHOM.map(m=><option key={m.ma} value={m.ma}>{m.ten} ({m.ma})</option>)}
           </select>
           <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
-            {KHUNG_TG.map(k=>(
+            {KHUNG_TG.filter(k=>!k.an).map(k=>(
               <button key={k.k} onClick={()=>setKhungK(k.k)} style={nut(khungK===k.k)}>{k.l}</button>
             ))}
           </div>
@@ -446,7 +446,9 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
         </div>
 
         <div style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600,marginTop:6,lineHeight:1.6}}>
-          Nguồn: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
+          Khung 15 phút và 1 giờ tạm ẩn: EastMoney trả sai lịch sử nến trong ngày
+          (chỉ phiên đang chạy là đúng) — khung Trong ngày / Ngày / Tuần / Tháng không bị ảnh hưởng.
+          {' '}Nguồn: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
           (giờ VN = trừ 1 tiếng; phiên đêm 21:00–01:00 giờ sàn = 20:00–00:00 giờ ta) ·
           quy ước màu <b style={{color:'#16a34a'}}>xanh = tăng</b> / <b style={{color:'#dc2626'}}>đỏ = giảm</b> (ngược app Trung Quốc) ·
           1 lô {mInfo.lo} tấn. Đường <b style={{color:'#ea580c'}}>SMM</b> là giá nhôm giao ngay Trung Quốc —

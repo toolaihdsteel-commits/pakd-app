@@ -24,8 +24,11 @@ const RA = path.resolve('public/market');
 const CAN_CHUP = [
   { ma: 'alm', khung: '101', klt: 101, lmt: 800 },
   { ma: 'alm', khung: '102', klt: 102, lmt: 600 },
-  { ma: 'alm', khung: '60',  klt: 60,  lmt: 500 },
-  { ma: 'alm', khung: '15',  klt: 15,  lmt: 400 },
+  // alm_60 / alm_15: BỎ HẲN (22/08/2026). push2his trả lịch sử trong ngày sai
+  // hệ thống — mọi nến trước phiên hiện hành ≈ giá thanh toán × 500, thử cả mã
+  // liên tục lẫn hợp đồng al2609/al2610 đều bệnh y hệt (al2608 hết niêm yết).
+  // Chụp tiếp chỉ đốt hạn mức request vốn rất hẹp của các file còn lại.
+  // Hai nút 15 phút / 1 giờ cũng đã ẩn trong KHUNG_TG (an:true).
   { ma: 'alm', khung: '103', klt: 103, lmt: 400 },
   { ma: 'aom', khung: '101', klt: 101, lmt: 800 },
   { ma: 'adm', khung: '101', klt: 101, lmt: 800 },

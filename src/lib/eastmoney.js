@@ -36,8 +36,17 @@ export const MA_NHOM = [
 // klt = mã khung thời gian của EastMoney. period = định dạng KLineChart v10.
 export const KHUNG_TG = [
   { k: 'trends', l: 'Trong ngày', klt: null, period: { span: 1,  type: 'minute' }, soNen: 0    },
-  { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400  },
-  { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500  },
+  // ── 15 phút & 1 giờ: ẨN (an:true) — kết luận ngày 22/08/2026 ──────────────
+  // push2his trả LỊCH SỬ trong ngày sai hoàn toàn: mọi nến trước phiên hiện
+  // hành có OHLC ≈ giá thanh toán × 500 (quy ra xu/lô), gần như phẳng; chỉ
+  // nến của phiên đang chạy là thật. Đã kiểm cả 3 hướng: mã liên tục alm,
+  // hợp đồng al2609, al2610 — bệnh y hệt nhau (120/124 nến hỏng); al2608 đã
+  // hết niêm yết. Đối chiếu bằng mốc độc lập turnover/(volume×5 tấn).
+  // Đây là lỗi dữ liệu PHÍA NGUỒN, không phải tham số (fqt=0/1/2, bỏ beg đều
+  // ra cùng con số). Khung "Trong ngày" (trends2) là endpoint khác và vẫn
+  // đúng. Muốn bật lại: xoá an:true rồi kiểm bằng npx vite-node tools/kiem-nen.mjs.
+  { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400, an: true },
+  { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500, an: true },
   { k: '101',    l: 'Ngày',       klt: 101,  period: { span: 1,  type: 'day'    }, soNen: 800  },
   { k: '102',    l: 'Tuần',       klt: 102,  period: { span: 1,  type: 'week'   }, soNen: 600  },
   { k: '103',    l: 'Tháng',      klt: 103,  period: { span: 1,  type: 'month'  }, soNen: 400  },
