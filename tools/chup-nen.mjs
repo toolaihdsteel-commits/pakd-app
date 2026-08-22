@@ -24,11 +24,11 @@ const RA = path.resolve('public/market');
 const CAN_CHUP = [
   { ma: 'alm', khung: '101', klt: 101, lmt: 800 },
   { ma: 'alm', khung: '102', klt: 102, lmt: 600 },
-  // alm_60 / alm_15: BỎ HẲN (22/08/2026). push2his trả lịch sử trong ngày sai
-  // hệ thống — mọi nến trước phiên hiện hành ≈ giá thanh toán × 500, thử cả mã
-  // liên tục lẫn hợp đồng al2609/al2610 đều bệnh y hệt (al2608 hết niêm yết).
-  // Chụp tiếp chỉ đốt hạn mức request vốn rất hẹp của các file còn lại.
-  // Hai nút 15 phút / 1 giờ cũng đã ẩn trong KHUNG_TG (an:true).
+  // 15/60: nguồn SINA (22/08/2026 — lần trước bỏ vì push2his hỏng lịch sử
+  // trong ngày; Sina thì sạch và đã đối chiếu chéo khớp EastMoney). Sina là
+  // host khác, không dính hạn mức chặn IP của EastMoney.
+  { ma: 'alm', khung: '60', klt: 60, lmt: 500, sina: { symbol: 'AL0', type: 60 } },
+  { ma: 'alm', khung: '15', klt: 15, lmt: 400, sina: { symbol: 'AL0', type: 15 } },
   { ma: 'alm', khung: '103', klt: 103, lmt: 400 },
   { ma: 'aom', khung: '101', klt: 101, lmt: 800 },
   { ma: 'adm', khung: '101', klt: 101, lmt: 800 },
@@ -81,6 +81,41 @@ async function goi(url, lanThu = 4) {
     }
   }
   throw loiCuoi;
+}
+
+// ─── Nguồn Sina cho nến phút ──────────────────────────────────────────────
+// Trả về mảng [{d:'2026-08-21 22:00:00',o,h,l,c,v,p}] bọc trong JSONP —
+// bóc bằng regex rồi JSON.parse. Sina KHÔNG có turnover (p là vị thế mở),
+// nên kiemNen chỉ soi được phần cơ bản; bù lại nguồn này đã đối chiếu chéo
+// khớp EastMoney ngày 22/08 (nến 21/08 22:00 cùng ra 23.745).
+async function goiSina(symbol, type, lanThu = 3) {
+  const url = 'https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_=/'
+    + `InnerFuturesNewService.getFewMinLine?symbol=${symbol}&type=${type}`;
+  let loiCuoi;
+  for (let i = 0; i < lanThu; i++) {
+    try {
+      const out = execFileSync(CURL, ['-sL', '--max-time', '30', '-A', UA,
+        '-e', 'https://finance.sina.com.cn', url],
+        { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      const m = out.match(/\((\[[\s\S]*\])\)/);
+      if (!m) throw new Error('Sina trả về định dạng lạ');
+      const arr = JSON.parse(m[1]);
+      if (!arr.length) throw new Error('Sina trả về rỗng');
+      return arr;
+    } catch (e) { loiCuoi = e; if (i < lanThu - 1) await nghi(3000 * (i + 1)); }
+  }
+  throw loiCuoi;
+}
+
+function docNenSina(arr) {
+  const nen = [];
+  for (const x of arr) {
+    const ts = sangMoc(String(x.d).replace(/:\d\d$/, ''));   // bỏ giây cho sangMoc
+    if (ts == null) continue;
+    nen.push({ timestamp: ts, open: so(x.o), close: so(x.c), high: so(x.h),
+               low: so(x.l), volume: so(x.v) ?? 0, turnover: 0 });
+  }
+  return nen;
 }
 
 fs.mkdirSync(RA, { recursive: true });
@@ -152,6 +187,7 @@ function maHopDongGan(n = 4) {
 
 /** Danh sách (mã, tham số) sẽ thử cho một mục tiêu. */
 function bienThe(c) {
+  if (c.sina) return [{ ten: `sina ${c.sina.symbol}/${c.sina.type}m`, sina: c.sina }];
   const trongNgay = c.klt < 101;
   // Ngày/tuần/tháng: lần đầu luôn đúng — một request là đủ, đừng phí hạn mức.
   if (!trongNgay) return [{ ten: 'fqt=0', ma: c.ma, q: 'fqt=0&beg=0&end=20500101' }];
@@ -184,13 +220,24 @@ for (const c of canLam) {
   let dat = null, ghiChu = [];
 
   for (const bt of bienThe(c)) {
-    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${bt.ma}`
-      + `&klt=${c.klt}&${bt.q}&lmt=${c.lmt}`
-      + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
     try {
+      let nen, tenHien;
+      if (bt.sina) {
+        const arr = await goiSina(bt.sina.symbol, bt.sina.type);
+        nen = docNenSina(arr);
+        if (nen.length > c.lmt) nen = nen.slice(-c.lmt);
+        tenHien = `Nhôm SHFE ${bt.sina.symbol} (Sina)`;
+        const k = kiemNen(nen, lo);
+        if (!k.ok) { ghiChu.push(`${bt.ten}: sai thang giá ${k.sai}/${nen.length}`); continue; }
+        dat = { nen, ten: tenHien, bt: bt.ten };
+        break;
+      }
+      const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=113.${bt.ma}`
+        + `&klt=${c.klt}&${bt.q}&lmt=${c.lmt}`
+        + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
       const d = (await goi(url, 2)).data;      // 2 lần thôi — còn biến thể khác để thử
       if (!d?.klines?.length) throw new Error('không có nến');
-      const nen = docNen(d, c.lmt);
+      nen = docNen(d, c.lmt);
       const k = kiemNen(nen, lo);
       if (!k.ok) { ghiChu.push(`${bt.ten}: sai thang giá ${k.sai}/${nen.length}`); await nghi(4000); continue; }
       dat = { nen, ten: d.name || c.ma, bt: bt.ten };

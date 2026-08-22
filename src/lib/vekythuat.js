@@ -12,11 +12,16 @@
 
 export const TEN_NGANG = 'horizontalStraightLine';
 export const TEN_XU_HUONG = 'segment';
+export const TEN_KENH = 'priceChannelLine';       // kênh giá song song (3 điểm)
+export const TEN_FIB = 'fibonacciLine';           // thoái lui Fibonacci (2 điểm)
 
+// soDiem: để thanh công cụ nhắc đúng "bấm mấy điểm" — klinecharts không tự nói.
 export const CONG_CU = [
-  { k: '',   l: '✥ Chọn',           overlay: null,          mota: 'Chọn / di chuyển nét vẽ' },
-  { k: 'xh', l: '╱ Đường xu hướng', overlay: TEN_XU_HUONG,  mota: 'Bấm 2 điểm để nối thành đường xu hướng' },
-  { k: 'ng', l: '━ Đường ngang',    overlay: TEN_NGANG,     mota: 'Bấm 1 điểm để đặt mức hỗ trợ / kháng cự' },
+  { k: '',   l: '✥ Chọn',           overlay: null,          soDiem: 0, mota: 'Chọn / di chuyển nét vẽ' },
+  { k: 'xh', l: '╱ Đường xu hướng', overlay: TEN_XU_HUONG,  soDiem: 2, mota: 'Bấm 2 điểm để nối thành đường xu hướng' },
+  { k: 'ng', l: '━ Đường ngang',    overlay: TEN_NGANG,     soDiem: 1, mota: 'Bấm 1 điểm để đặt mức hỗ trợ / kháng cự' },
+  { k: 'kg', l: '∥ Kênh giá',       overlay: TEN_KENH,      soDiem: 3, mota: 'Bấm 2 điểm vẽ cạnh trên, điểm 3 định bề rộng kênh' },
+  { k: 'fb', l: '≡ Fibonacci',      overlay: TEN_FIB,       soDiem: 2, mota: 'Bấm đỉnh rồi đáy (hoặc ngược lại) để trải các mức thoái lui' },
 ];
 
 // Màu tách bạch với nến (xanh lá / đỏ) để không nhìn nhầm
@@ -28,6 +33,15 @@ export const KIEU_VE = {
   [TEN_NGANG]: {
     line: { color: '#9333ea', size: 2, style: 'dashed', dashedValue: [6, 4] },
     point: { color: '#9333ea', borderColor: 'rgba(147,51,234,.25)', activeColor: '#7e22ce' },
+  },
+  [TEN_KENH]: {
+    line: { color: '#0d9488', size: 2 },
+    point: { color: '#0d9488', borderColor: 'rgba(13,148,136,.25)', activeColor: '#0f766e' },
+  },
+  [TEN_FIB]: {
+    line: { color: '#d97706', size: 1 },
+    text: { color: '#b45309' },
+    point: { color: '#d97706', borderColor: 'rgba(217,119,6,.25)', activeColor: '#b45309' },
   },
 };
 
@@ -92,6 +106,8 @@ export function xoaHet(chart, ma) {
 /** Đếm nét đang lưu, tách theo loại — dùng cho nhãn nút. */
 export function demVe(ma, khung) {
   const d = doc(ma);
+  // Mọi nét KHÔNG phải đường ngang đều theo phạm vi từng khung (xu hướng,
+  // kênh giá, Fibonacci) — quy tắc chung, thêm công cụ mới không phải sửa đây.
   return {
     ngang: d.filter((v) => v.name === TEN_NGANG).length,
     xuHuong: d.filter((v) => v.name !== TEN_NGANG && v.khung === khung).length,

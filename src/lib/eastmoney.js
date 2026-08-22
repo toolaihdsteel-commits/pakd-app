@@ -25,7 +25,7 @@ const TTL_SS = 12 * 60 * 60 * 1000;        // 12 giờ
 const TOI_DA_LUU = 900;                    // số nến lưu vào sessionStorage (tránh đầy quota)
 // Đổi số này mỗi khi sửa cách phân tích dữ liệu → cache cũ tự bị bỏ, không cần
 // người dùng xoá tay. (v1 từng lưu nhầm nến ngày dưới khoá khung giờ.)
-const PB_CACHE = 'v2';
+const PB_CACHE = 'v3';   // v3: 15/60 chuyển nguồn Sina
 
 export const MA_NHOM = [
   { ma: 'alm', ten: 'Nhôm Thượng Hải A00', lo: 5,  buocGia: 5 },
@@ -36,17 +36,19 @@ export const MA_NHOM = [
 // klt = mã khung thời gian của EastMoney. period = định dạng KLineChart v10.
 export const KHUNG_TG = [
   { k: 'trends', l: 'Trong ngày', klt: null, period: { span: 1,  type: 'minute' }, soNen: 0    },
-  // ── 15 phút & 1 giờ: ẨN (an:true) — kết luận ngày 22/08/2026 ──────────────
-  // push2his trả LỊCH SỬ trong ngày sai hoàn toàn: mọi nến trước phiên hiện
-  // hành có OHLC ≈ giá thanh toán × 500 (quy ra xu/lô), gần như phẳng; chỉ
-  // nến của phiên đang chạy là thật. Đã kiểm cả 3 hướng: mã liên tục alm,
-  // hợp đồng al2609, al2610 — bệnh y hệt nhau (120/124 nến hỏng); al2608 đã
-  // hết niêm yết. Đối chiếu bằng mốc độc lập turnover/(volume×5 tấn).
-  // Đây là lỗi dữ liệu PHÍA NGUỒN, không phải tham số (fqt=0/1/2, bỏ beg đều
-  // ra cùng con số). Khung "Trong ngày" (trends2) là endpoint khác và vẫn
-  // đúng. Muốn bật lại: xoá an:true rồi kiểm bằng npx vite-node tools/kiem-nen.mjs.
-  { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400, an: true },
-  { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500, an: true },
+  // ── 15 phút & 1 giờ: nguồn SINA FINANCE (quyết định 22/08/2026, lần 2) ────
+  // Lịch sử: push2his của EastMoney trả LỊCH SỬ trong ngày hỏng hệ thống —
+  // mọi nến trước phiên hiện hành ≈ giá thanh toán × 500, thử đủ mã liên tục
+  // lẫn hợp đồng al2609/al2610 và mọi tham số fqt đều bệnh y hệt. Hai nút này
+  // từng bị ẩn (an:true) vì vậy.
+  // Nay lấy qua Sina (InnerFuturesNewService.getFewMinLine, symbol AL0):
+  //   • 1.023 nến 60m sạch, ĐỐI CHIẾU CHÉO khớp đúng các nến còn lành của
+  //     EastMoney (21/08 22:00 cùng ra 23.745), trục thời gian tăng dần.
+  //   • Sina KHÔNG mở CORS → trình duyệt đi qua proxy Apps Script (doGet
+  //     action=nenSina, có whitelist + cache); lưới đỡ là ảnh chụp tĩnh do
+  //     chup-nen.mjs tải bằng curl.
+  { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400, sina: true },
+  { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500, sina: true },
   { k: '101',    l: 'Ngày',       klt: 101,  period: { span: 1,  type: 'day'    }, soNen: 800  },
   { k: '102',    l: 'Tuần',       klt: 102,  period: { span: 1,  type: 'week'   }, soNen: 600  },
   { k: '103',    l: 'Tháng',      klt: 103,  period: { span: 1,  type: 'month'  }, soNen: 400  },
@@ -65,7 +67,10 @@ export const khungTuPeriod = (p) =>
 // Phải ghim +08:00, nếu không trình duyệt sẽ hiểu theo giờ máy → lệch 1 tiếng.
 function sangMoc(s) {
   const t = String(s).trim();
-  const iso = t.includes(' ') ? t.replace(' ', 'T') + ':00' : t + 'T00:00:00';
+  // EastMoney: "2026-08-20 14:30" (thiếu giây) · Sina: "2026-08-21 22:00:00"
+  // (đủ giây) · nến ngày: "2026-08-20". Đếm dấu ":" để khỏi chắp thừa.
+  const iso = !t.includes(' ') ? t + 'T00:00:00'
+    : t.replace(' ', 'T') + ((t.match(/:/g) || []).length >= 2 ? '' : ':00');
   const ms = Date.parse(iso + '+08:00');
   return isNaN(ms) ? null : ms;
 }
@@ -238,6 +243,34 @@ async function taiTinh(ma, khungK) {
   return { ...g, nen: q.nen, kieu: khungK === 'trends' ? 'trongNgay' : 'nen' };
 }
 
+// ─── Nguồn 4: nến phút qua PROXY APPS SCRIPT (dữ liệu gốc Sina Finance) ───
+// Sina không mở CORS nên trình duyệt không gọi thẳng được; Apps Script đứng
+// giữa (UrlFetchApp không vướng CORS, IP Google không bị chặn). URL do App.jsx
+// nạp từ cấu hình dùng chung (config/gas.json) qua datGasUrl().
+let GAS_URL = '';
+export const datGasUrl = (u) => { GAS_URL = String(u || '').trim(); };
+export const coGasUrl = () => !!GAS_URL;
+
+async function taiNenSina(ma, khungK, signal) {
+  if (ma !== 'alm') throw new Error(`khung phút chỉ có cho nhôm SHFE (mã ${ma} chưa hỗ trợ)`);
+  if (!GAS_URL) throw new Error('chưa cấu hình Apps Script (⚙️ GitHub → Ghi GSheet)');
+  const u = `${GAS_URL}?action=nenSina&symbol=AL0&type=${khungK}`;
+  const d = await goiJSON(u, { signal, lanThu: 2, timeout: 12000 });
+  if (!d?.ok || !Array.isArray(d.nen) || !d.nen.length)
+    throw new Error(d?.error || 'proxy không trả về nến');
+  const nen = [];
+  for (const r of d.nen) {
+    const ts = sangMoc(r.d);
+    if (ts == null) continue;
+    nen.push({ timestamp: ts, open: so(r.o), high: so(r.h), low: so(r.l),
+               close: so(r.c), volume: so(r.v) ?? 0, turnover: 0 });
+  }
+  // Sina không có turnover → locNenHopLe chỉ soi được phần cơ bản. Chấp nhận
+  // được: nguồn này đã đối chiếu chéo khớp EastMoney ngày 22/08.
+  const q = locNenHopLe(nen, { lo: timMa(ma).lo, ten: 'Sina' });
+  return { ten: d.ten || 'Nhôm SHFE (Sina)', nen: q.nen, kieu: 'nen' };
+}
+
 // ═══ HÀM CHÍNH ═══════════════════════════════════════════════════════════
 // Trả về { ten, nen[], kieu, nguon, canhBao? }
 //   nguon: 'mang' | 'ram' | 'phien' | 'tinh'
@@ -253,7 +286,9 @@ export async function layNen(ma, khungK, { signal, boQuaCache = false } = {}) {
   try {
     const goi = kh.klt == null
       ? await taiTrongNgay(ma, signal)
-      : await taiNenK(ma, kh.klt, kh.soNen, signal);
+      : kh.sina
+        ? await taiNenSina(ma, khungK, signal)
+        : await taiNenK(ma, kh.klt, kh.soNen, signal);
     ram.set(khoa, { goi, luc: Date.now() });
     ghiSS(khoa, goi);
     return { ...goi, nguon: 'mang' };
@@ -261,10 +296,12 @@ export async function layNen(ma, khungK, { signal, boQuaCache = false } = {}) {
     if (signal?.aborted) throw e;
 
     // Nói ĐÚNG nguyên nhân: mất kết nối và "trả về số sai" là hai chuyện khác
-    // nhau, cách xử lý cũng khác (chờ vs báo kỹ thuật).
+    // nhau, cách xử lý cũng khác (chờ vs báo kỹ thuật). Khung phút đi nguồn
+    // Sina qua Apps Script nên phải gọi đúng tên, đừng đổ oan EastMoney.
+    const tenNguon = kh.sina ? 'Nguồn nến phút (Sina qua Apps Script)' : 'EastMoney';
     const viSao = /không hợp lệ/.test(e.message)
-      ? `EastMoney trả về dữ liệu sai (${e.message})`
-      : `EastMoney không phản hồi (${e.message})`;
+      ? `${tenNguon} trả về dữ liệu sai (${e.message})`
+      : `${tenNguon} không phản hồi (${e.message})`;
 
     const ss = docSS(khoa, timMa(ma).lo);
     if (ss?.nen?.length) {

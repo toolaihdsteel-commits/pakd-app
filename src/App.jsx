@@ -8,6 +8,7 @@ import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
 import {CashFlowTab} from './components/CashFlowTab';
 import {MarketTab} from './components/MarketTab';
 import {EastMoneyChart} from './components/EastMoneyChart';
+import {datGasUrl} from './lib/eastmoney';
 import {ApprovalModal,ApproverAddForm,PinPromptModal,PinSetupForm} from './components/pin';
 // ─── APP ──────────────────────────────────────────────────────
 const App=()=>{
@@ -65,6 +66,9 @@ const App=()=>{
   // ── GĐ2: cấu hình Google Apps Script (ghi 2 chiều GSheet) ──
   const [gasConfig,setGasConfig]=useState(()=>{try{return JSON.parse(localStorage.getItem('pakd_gas_config')||'{}');}catch(e){return{};}});
   const saveGasConfig=(cfg)=>{setGasConfig(cfg);try{localStorage.setItem('pakd_gas_config',JSON.stringify(cfg));}catch(e){}};
+  // Nến 15 phút / 1 giờ đi qua proxy Apps Script (nguồn Sina) — lớp dữ liệu
+  // eastmoney.js là module thuần nên nhận URL qua setter, không đọc state React.
+  useEffect(()=>{datGasUrl(gasConfig.url);},[gasConfig.url]);
   // Ref để các useCallback luôn đọc giá trị mới nhất (tránh stale closure)
   const ghVerifiedRef=useRef(false);
   useEffect(()=>{ghVerifiedRef.current=ghVerified;},[ghVerified]);

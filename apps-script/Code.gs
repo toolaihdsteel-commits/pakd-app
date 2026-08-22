@@ -929,6 +929,39 @@ function doGet(e){
   //   bản MỚI → {"ok":true,"phienBan":"..."}
   //   bản CŨ → {"ok":false,"error":"Sai mã bí mật"}  (vì nó hỏi secret trước)
   if (p.action === 'version') return json_({ ok: true, msg: 'Apps Script ' + PHIEN_BAN, phienBan: PHIEN_BAN });
+  // ── PROXY NẾN PHÚT (dữ liệu gốc Sina Finance) — KHÔNG cần mã bí mật ───────
+  // Vì sao tồn tại: Sina không mở CORS nên trình duyệt không gọi thẳng được;
+  // EastMoney thì trả lịch sử trong ngày hỏng hệ thống (nến cũ ≈ giá × 500,
+  // chốt điều tra 22/08/2026). UrlFetchApp của Google không vướng CORS và IP
+  // Google không bị chặn. Dữ liệu thị trường công khai nên đặt TRƯỚC bước kiểm
+  // secret — nhờ vậy URL trên thanh địa chỉ không bao giờ phải chứa mã bí mật.
+  // CHỐNG LẠM DỤNG: whitelist cứng symbol + type, không cho fetch URL tùy ý.
+  if (p.action === 'nenSina'){
+    var symOk = { AL0: 1 };                       // thêm mã khi có nhu cầu thật
+    var typeOk = { '15': 1, '60': 1 };
+    var sym = String(p.symbol || 'AL0'), typ = String(p.type || '60');
+    if (!symOk[sym] || !typeOk[typ]) return json_({ ok: false, error: 'symbol/type ngoài whitelist' });
+    var khoaCache = 'nenSina:' + sym + ':' + typ;
+    var cache = CacheService.getScriptCache();
+    var cu2 = cache.get(khoaCache);
+    if (cu2) return json_(JSON.parse(cu2));
+    try {
+      var raw = UrlFetchApp.fetch(
+        'https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_=/InnerFuturesNewService.getFewMinLine?symbol=' + sym + '&type=' + typ,
+        { muteHttpExceptions: true, followRedirects: true,
+          headers: { Referer: 'https://finance.sina.com.cn' } }).getContentText();
+      var m2 = raw.match(/\((\[[\s\S]*\])\)/);
+      if (!m2) return json_({ ok: false, error: 'Sina trả về định dạng lạ' });
+      var arr = JSON.parse(m2[1]);
+      if (!arr.length) return json_({ ok: false, error: 'Sina trả về rỗng' });
+      var ra = { ok: true, ten: 'Nhôm SHFE ' + sym + ' (Sina)', soNen: arr.length,
+                 nen: arr.map(function(x){ return { d: x.d, o: x.o, h: x.h, l: x.l, c: x.c, v: x.v }; }) };
+      // 120 giây: đủ tươi cho nến 15 phút, và cả phòng cùng mở app cũng chỉ
+      // tốn 1 request Sina mỗi 2 phút — không bao giờ bị chặn vì dồn dập.
+      try { cache.put(khoaCache, JSON.stringify(ra), 120); } catch (e2){ /* >100KB thì thôi, vẫn trả về */ }
+      return json_(ra);
+    } catch (err2){ return json_({ ok: false, error: 'UrlFetchApp: ' + String(err2 && err2.message || err2) }); }
+  }
   if (p.secret !== props_().getProperty('SECRET')) return json_({ ok: false, error: 'Sai mã bí mật' });
   if (p.action === 'market'){
     const sh = ss_().getSheetByName(MARKET_SHEET);

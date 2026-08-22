@@ -29,13 +29,15 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [soNen,setSoNen]=useState(0);
   const [gia,setGia]=useState(null);
   const [phien,setPhien]=useState(()=>trangThaiPhien());
-  const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng'
+  const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng' | 'kg' | 'fb'
+  const [toanManHinh,setToanManHinh]=useState(false);
   const [demNet,setDemNet]=useState({ngang:0,xuHuong:0,tong:0});
   const [dangChon,setDangChon]=useState(null);// id nét đang chọn (để xoá bằng phím Delete)
   const [hienSMM,setHienSMM]=useState(true);
   const [bocVat,setBocVat]=useState(true);    // mặc định BẬT — xem mục VAT trong lopphu.js
 
   const boxRef=useRef(null);
+  const manHinhRef=useRef(null);   // vùng đưa lên toàn màn hình (gồm cả thanh công cụ)
   const chartRef=useRef(null);
   const huyRef=useRef(null);
   const epTaiRef=useRef(false);   // true = bỏ qua nhớ tạm, gọi thẳng mạng (nút Làm mới)
@@ -207,6 +209,31 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     if(chart&&loaderRef.current) chart.setDataLoader(loaderRef.current);
   },[]);
 
+  // ── Toàn màn hình TƯƠNG TÁC ─────────────────────────────────────────────
+  // Đưa cả CỤM (thanh chọn khung + công cụ vẽ + biểu đồ) lên fullscreen chứ
+  // không riêng canvas — nhờ vậy trong lúc trình chiếu vẫn vẽ, đổi khung, gạt
+  // VAT bình thường. Nét vẽ giữ nguyên vì vẫn là CHÍNH instance chart đó,
+  // không hủy/tạo lại gì cả; chỉ cần resize() sau khi trình duyệt đổi kích
+  // thước xong (2 nhịp: ngay sau sự kiện + 150ms cho layout ổn định).
+  useEffect(()=>{
+    const doi=()=>{
+      const bat=document.fullscreenElement===manHinhRef.current;
+      setToanManHinh(bat);
+      requestAnimationFrame(()=>chartRef.current?.resize());
+      setTimeout(()=>chartRef.current?.resize(),150);
+    };
+    document.addEventListener('fullscreenchange',doi);
+    return()=>document.removeEventListener('fullscreenchange',doi);
+  },[]);
+  const gatToanManHinh=useCallback(()=>{
+    const el=manHinhRef.current; if(!el) return;
+    if(document.fullscreenElement){ document.exitFullscreen?.(); return; }
+    const p=el.requestFullscreen?.()||el.webkitRequestFullscreen?.();
+    Promise.resolve(p).catch(()=>{
+      alert('Trình duyệt này không cho phép toàn màn hình — dùng phím F11 thay thế.');
+    });
+  },[]);
+
   // Đổi chế độ VAT phải nạp lại nến vì hệ số áp ngay trong getBars.
   // Bỏ qua lần chạy đầu (nến vừa nạp xong rồi).
   const vatDauRef=useRef(true);
@@ -330,8 +357,17 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
               {phien.mo?'● ':'○ '}{phien.chu}
             </span>
             <button onClick={lamMoi} style={nut(false)}>↻ Làm mới</button>
+            <button onClick={gatToanManHinh} style={nut(toanManHinh)}
+                    title="Phóng to cả biểu đồ lẫn thanh công cụ để trình chiếu — vẽ và đổi khung vẫn dùng được (Esc để thoát)">
+              {toanManHinh?'🗗 Thoát toàn màn hình':'⛶ Toàn màn hình'}
+            </button>
           </div>
         </div>
+
+        {/* ── VÙNG TOÀN MÀN HÌNH: từ thanh chọn mã tới hết khung vẽ ── */}
+        <div ref={manHinhRef} style={toanManHinh
+          ?{background:bg1,padding:'14px',overflowY:'auto',height:'100%'}
+          :undefined}>
 
         {/* Chọn mã + khung thời gian */}
         <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10,
@@ -393,9 +429,8 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           <div style={{flex:1}}/>
           <span style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600}}>
             {congCu
-              ? (congCu==='ng'?'Bấm 1 điểm trên biểu đồ để đặt đường ngang'
-                              :'Bấm 2 điểm trên biểu đồ để nối đường xu hướng')
-              : `${demNet.xuHuong} xu hướng · ${demNet.ngang} đường ngang`}
+              ? (CONG_CU.find(t=>t.k===congCu)?.mota||'')
+              : `${demNet.xuHuong} nét khung này · ${demNet.ngang} đường ngang`}
           </span>
         </div>
 
@@ -430,7 +465,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
 
         {/* Khung vẽ KLineChart */}
         <div style={{position:'relative',background:'#fff',border:`1px solid ${border2}`,borderRadius:8}}>
-          <div ref={boxRef} style={{width:'100%',height:480}}/>
+          <div ref={boxRef} style={{width:'100%',height:toanManHinh?'calc(100vh - 250px)':480}}/>
           {hienSMM&&!khungHoTro&&(
             <div style={{position:'absolute',left:12,bottom:10,zIndex:2,pointerEvents:'none',
                          background:'rgba(255,255,255,.86)',border:`1px solid ${border2}`,borderRadius:5,
@@ -445,10 +480,12 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           )}
         </div>
 
+        </div>{/* hết vùng toàn màn hình */}
+
         <div style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600,marginTop:6,lineHeight:1.6}}>
-          Khung 15 phút và 1 giờ tạm ẩn: EastMoney trả sai lịch sử nến trong ngày
-          (chỉ phiên đang chạy là đúng) — khung Trong ngày / Ngày / Tuần / Tháng không bị ảnh hưởng.
-          {' '}Nguồn: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
+          Nến 15 phút / 1 giờ lấy từ <b>Sina Finance</b> qua proxy Apps Script (EastMoney trả sai
+          lịch sử trong ngày — đã đối chiếu chéo hai nguồn khớp nhau ngày 22/08).
+          {' '}Các khung còn lại: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
           (giờ VN = trừ 1 tiếng; phiên đêm 21:00–01:00 giờ sàn = 20:00–00:00 giờ ta) ·
           quy ước màu <b style={{color:'#16a34a'}}>xanh = tăng</b> / <b style={{color:'#dc2626'}}>đỏ = giảm</b> (ngược app Trung Quốc) ·
           1 lô {mInfo.lo} tấn. Đường <b style={{color:'#ea580c'}}>SMM</b> là giá nhôm giao ngay Trung Quốc —

@@ -74,7 +74,7 @@ ok('Giữ nguyên 30 nến lành', r4.nen.length === 30);
 // ═══ 4. Không bắt nhầm hàng lành ═══════════════════════════════════════
 console.log('\n── Không bắt nhầm (mỗi mã một cỡ lô) ──');
 const RA = fileURLToPath(new URL('../public/market/', import.meta.url));
-for (const [f, lo] of [['alm_101.json', 5], ['alm_102.json', 5], ['alm_103.json', 5], ['aom_101.json', 20], ['adm_101.json', 10]]) {
+for (const [f, lo] of [['alm_101.json', 5], ['alm_102.json', 5], ['alm_103.json', 5], ['alm_60.json', 5], ['alm_15.json', 5], ['aom_101.json', 20], ['adm_101.json', 10]]) {   // alm_60/15: nguồn Sina, turnover=0 → kiểm cơ bản
   const duong = path.join(RA, f);
   if (!fs.existsSync(duong)) { console.log(`   (bỏ qua ${f} — chưa có)`); continue; }
   const g = JSON.parse(fs.readFileSync(duong, 'utf8'));
@@ -83,8 +83,10 @@ for (const [f, lo] of [['alm_101.json', 5], ['alm_102.json', 5], ['alm_103.json'
     ok(`${f} (lô ${lo} tấn) đi qua sạch`, r.boDi === 0, `${r.nen.length} nến, bỏ ${r.boDi}`);
   } catch (e) { ok(`${f} (lô ${lo} tấn) đi qua sạch`, false, e.message); }
 }
-ok('File alm_60.json hỏng đã bị gỡ khỏi kho',
-   !fs.existsSync(path.join(RA, 'alm_60.json')));
+// Trước đây khẳng định alm_60.json PHẢI VẮNG (file EastMoney hỏng đã gỡ).
+// Nguồn đã đổi sang Sina nên khẳng định ngược lại: phải CÓ, và lành.
+ok('alm_60.json (nguồn Sina) đã trở lại kho', fs.existsSync(path.join(RA, 'alm_60.json')));
+ok('alm_15.json (nguồn Sina) đã trở lại kho', fs.existsSync(path.join(RA, 'alm_15.json')));
 
 // ═══ 5. Đường trong ngày không có turnover → không được chặn oan ═══════
 console.log('\n── Đường trong ngày (trends2, không có turnover) ──');
@@ -118,20 +120,25 @@ ok('Nguồn = ảnh chụp tĩnh', g6.nguon === 'tinh', g6.nguon);
 ok('Có câu cảnh báo cho người dùng', !!g6.canhBao, g6.canhBao);
 ok('KHÔNG ném lỗi làm treo luồng nghiệp vụ', true);
 
-console.log('\n── Mất mạng + khung chưa có ảnh chụp (1 giờ) ──');
+console.log('\n── Khung 1 giờ: chưa cấu hình Apps Script → lùi về ảnh chụp Sina ──');
 soLanGoiMang = 0;
-let loi60 = null;
-try { await layNen('alm', '60'); } catch (e) { loi60 = e.message; }
-ok('Báo lỗi rõ ràng thay vì vẽ nến sai', !!loi60, loi60);
-ok('Không lộ dữ liệu 11 triệu ra biểu đồ', !/11\d{6}/.test(String(loi60)));
+const g7 = await layNen('alm', '60');
+ok('Vẫn có nến để vẽ', g7.nen.length >= 300, `${g7.nen.length} nến`);
+ok('Nguồn = ảnh chụp tĩnh', g7.nguon === 'tinh', g7.nguon);
+ok('Không đốt request EastMoney nào cho khung này', soLanGoiMang === 0, `${soLanGoiMang} request`);
+ok('Cảnh báo gọi đúng tên nguồn Sina/Apps Script', /Sina|Apps Script/.test(g7.canhBao || ''), g7.canhBao);
+ok('Không còn dữ liệu 11 triệu', g7.nen.every((n) => n.close < 100000));
 
 // ═══ 7. Khung 15 phút / 1 giờ phải ở trạng thái ẨN (kết luận 22/08) ═════
-console.log('\n── Khung trong ngày bị ẩn vì nguồn trả sai lịch sử ──');
+console.log('\n── Khung 15/60 hiện trở lại với nguồn Sina ──');
 const { KHUNG_TG } = await import('../src/lib/eastmoney.js');
-ok('15 phút và 1 giờ mang cờ an:true',
-   KHUNG_TG.filter((k) => k.an).map((k) => k.k).sort().join(',') === '15,60');
-ok('Trong ngày / Ngày / Tuần / Tháng vẫn hiện',
-   KHUNG_TG.filter((k) => !k.an).map((k) => k.k).join(',') === 'trends,101,102,103');
+// 22/08 chiều: hai khung này từng ẩn (an:true) vì EastMoney hỏng lịch sử
+// trong ngày. Nay có nguồn thay thế (Sina qua proxy Apps Script) nên phải
+// HIỆN đủ 6 khung, và 15/60 mang cờ sina để layNen đi đúng đường.
+ok('Không còn khung nào bị ẩn', KHUNG_TG.every((k) => !k.an));
+ok('15 phút và 1 giờ mang cờ sina',
+   KHUNG_TG.filter((k) => k.sina).map((k) => k.k).sort().join(',') === '15,60');
+ok('Đủ 6 khung hiển thị', KHUNG_TG.length === 6);
 
 console.log(hong ? `\n${hong} phép kiểm SAI` : '\nToàn bộ phép kiểm ĐÚNG');
 process.exit(hong ? 1 : 0);
