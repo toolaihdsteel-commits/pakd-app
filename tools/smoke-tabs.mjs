@@ -58,8 +58,21 @@ thu('MarketTab (rong)', React.createElement(MarketTab, {
   scenarios:[], setScenarios:nop, saveScenario:nop, setTab:nop, ...chung,
 }), ['Thị trường']);
 
-thu('EastMoneyChart', React.createElement(EastMoneyChart, { marketData, ...chung }),
-    ['Biểu đồ Kỹ thuật', 'Nhôm Thượng Hải A00', 'Ngày']);
+const floorHistory = [
+  { issuedISO:'2026-08-01T03:00:00.000Z', groups:[
+      { id:'g0', label:'Nhôm cuộn A1050 H14 0.5-1.0', alloy:'A1050', totalQty:120000, publishedFloor:78500 },
+      { id:'g1', label:'Nhôm tấm A5052 H32 2-4',      alloy:'A5052', totalQty: 45000, publishedFloor:92000 }]},
+  { issuedISO:'2026-07-01T03:00:00.000Z', groups:[
+      { id:'g0', label:'Nhôm cuộn A1050 H14 0.5-1.0', alloy:'A1050', totalQty:118000, publishedFloor:77200 }]},
+];
+
+thu('EastMoneyChart', React.createElement(EastMoneyChart,
+    { marketData, allRawImportPrices, floorHistory, ...chung }),
+    ['Biểu đồ Kỹ thuật', 'Nhôm Thượng Hải A00', 'Ngày', 'Bóc VAT', 'Nhóm sàn']);
+
+thu('EastMoneyChart (khong co lich su san)', React.createElement(EastMoneyChart,
+    { marketData, allRawImportPrices:[], floorHistory:[], ...chung }),
+    ['Biểu đồ Kỹ thuật', 'chưa có lịch sử giá sàn']);
 
 console.log(loi ? `\n${loi} tab loi` : '\nTat ca tab render OK');
 process.exit(loi ? 1 : 0);

@@ -41,8 +41,11 @@ function doc(ma) {
   } catch { return []; }
 }
 
+// Nét vẽ LUÔN lưu ở mặt bằng GỒM VAT (đơn vị chuẩn), bất kể lúc vẽ đang bật
+// hay tắt "bóc VAT". Nhờ vậy gạt công tắc VAT không làm lệch nét đã vẽ.
+//   heSo = 1/1,13 khi đang bóc VAT, = 1 khi hiển thị giá gồm VAT.
 /** Lưu nét vẽ đang có trên chart, GIỮ NGUYÊN nét của các khung khác. */
-export function luuVe(chart, ma, khung) {
+export function luuVe(chart, ma, khung, heSo = 1) {
   if (!chart) return 0;
   // Nét của khung khác không nằm trên chart lúc này → phải bê nguyên từ bản cũ
   // sang, nếu không mỗi lần đổi khung là xoá mất nét đã vẽ ở khung trước.
@@ -54,7 +57,7 @@ export function luuVe(chart, ma, khung) {
     .map((o) => ({
       name: o.name,
       khung: o.extendData?.khung ?? khung,
-      points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
+      points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value / heSo })),
     }));
 
   try { localStorage.setItem(KHOA(ma), JSON.stringify([...giuLai, ...hienTai])); } catch { /* đầy quota */ }
@@ -62,7 +65,7 @@ export function luuVe(chart, ma, khung) {
 }
 
 /** Xoá hết nét trên chart rồi vẽ lại đúng những nét thuộc phạm vi (mã, khung). */
-export function khoiPhucVe(chart, ma, khung) {
+export function khoiPhucVe(chart, ma, khung, heSo = 1) {
   if (!chart) return 0;
   chart.removeOverlay();
   let n = 0;
@@ -71,7 +74,7 @@ export function khoiPhucVe(chart, ma, khung) {
     if (!v.points?.length) continue;
     chart.createOverlay({
       name: v.name,
-      points: v.points,
+      points: v.points.map((p) => ({ ...p, value: p.value * heSo })),
       styles: KIEU_VE[v.name],
       extendData: { khung: v.khung ?? khung },
     });

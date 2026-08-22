@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "verify": "node tools/tdz.mjs && vite-node tools/smoke.mjs && vite-node tools/smoke-tabs.mjs && vite build",
+    "verify": "node tools/tdz.mjs && vite-node tools/smoke.mjs && vite-node tools/smoke-tabs.mjs && vite-node tools/kiem-lopphu.mjs && vite build",
     "smoke": "vite-node tools/smoke.mjs",
     "smoke:tabs": "vite-node tools/smoke-tabs.mjs",
-    "tdz": "node tools/tdz.mjs"
+    "tdz": "node tools/tdz.mjs",
+    "kiem:lopphu": "vite-node tools/kiem-lopphu.mjs"
   },
   "dependencies": {
     "chart.js": "^4.4.0",
