@@ -37,7 +37,12 @@ jobs:
           GAS_URL: ${{ secrets.GAS_URL }}
           GAS_SECRET: ${{ secrets.GAS_SECRET }}
         run: |
-          if [ -z "$GAS_URL" ]; then echo "Chưa cấu hình GAS_URL — bỏ qua (plan B chưa bật)."; exit 0; fi
+          if [ -z "$GAS_URL" ]; then
+            echo "::warning::Job lấy giá là NO-OP: chưa tạo secret GAS_URL/GAS_SECRET nên KHÔNG ghi gì vào GSheet."
+            echo "::warning::Dấu tích xanh của job này KHÔNG có nghĩa là giá đã về — bẫy đã dính sáng 24/08."
+            echo "::warning::Bật: Settings → Secrets and variables → Actions → thêm GAS_URL (URL /exec) và GAS_SECRET."
+            exit 0
+          fi
           python3 - <<'EOF'
           import json, os, re, urllib.request
 
