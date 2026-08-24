@@ -434,25 +434,40 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           </span>
         </div>
 
-        {/* Giá hiện tại */}
-        {gia&&(
-          <div style={{display:'flex',gap:14,flexWrap:'wrap',alignItems:'baseline',marginBottom:10,
-                       background:bg2,border:`1px solid ${border2}`,borderRadius:8,padding:'9px 12px'}}>
-            <span style={{fontSize:'1.25rem',fontWeight:900,color:mauTD}} className="mono">
-              {gia.gia?.toLocaleString('vi-VN')??'—'}
-            </span>
-            <span style={{fontSize:'.78rem',fontWeight:800,color:mauTD}} className="mono">
-              {gia.thayDoi>0?'+':''}{gia.thayDoi?.toLocaleString('vi-VN')??'—'}
-              {gia.phanTram!=null?`  ${gia.phanTram>0?'+':''}${gia.phanTram.toFixed(2)}%`:''}
-            </span>
-            <span style={{fontSize:'.7rem',color:'#64748b',fontWeight:700}}>CNY/tấn</span>
-            <div style={{flex:1}}/>
-            <span style={{fontSize:'.7rem',fontWeight:700,color:'#475569'}} className="mono">
-              Mở {gia.mo?.toLocaleString('vi-VN')} · Cao {gia.cao?.toLocaleString('vi-VN')}
-              {' '}· Thấp {gia.thap?.toLocaleString('vi-VN')} · KL {gia.kl?.toLocaleString('vi-VN')} lô
-            </span>
+        {/* Giá khớp mới nhất từ sàn — phải TỰ GIẢI THÍCH: người dùng từng hỏi
+            "mấy con số này là gì", và giá từng hiện GỒM VAT trong khi trục nến
+            bên dưới đang BÓC VAT — hai số vênh nhau ngay trên một màn hình.
+            Nay: có nhãn, có chú thích từng số, và nhân cùng heSoVat với nến
+            để cả trang chỉ có MỘT mặt bằng giá. KL đổi thêm ra tấn vì phòng
+            mua hàng tư duy bằng tấn, không bằng lô. */}
+        {gia&&(()=>{
+          const f=heSoVat, qd=(v)=>v!=null?Math.round(v*f).toLocaleString('vi-VN'):'—';
+          return (
+          <div style={{marginBottom:10,background:bg2,border:`1px solid ${border2}`,
+                       borderRadius:8,padding:'8px 12px'}}>
+            <div style={{fontSize:'.62rem',fontWeight:900,color:'#64748b',letterSpacing:.3,marginBottom:3}}>
+              GIÁ KHỚP MỚI NHẤT — SÀN SHFE ({mInfo.ten})
+              <span style={{fontWeight:600}}> · {bocVat?'đã bóc VAT 13%':'gồm VAT'} · tự cập nhật 30 giây/lần trong giờ giao dịch</span>
+            </div>
+            <div style={{display:'flex',gap:14,flexWrap:'wrap',alignItems:'baseline'}}>
+              <span style={{fontSize:'1.25rem',fontWeight:900,color:mauTD}} className="mono"
+                    title="Giá khớp lệnh gần nhất trên sàn">{qd(gia.gia)}</span>
+              <span style={{fontSize:'.7rem',color:'#64748b',fontWeight:700}}>CNY/tấn</span>
+              <span style={{fontSize:'.78rem',fontWeight:800,color:mauTD}} className="mono"
+                    title="Chênh lệch so với giá tham chiếu hôm trước">
+                {gia.thayDoi>0?'▲ +':gia.thayDoi<0?'▼ ':''}{gia.thayDoi!=null?Math.round(gia.thayDoi*f).toLocaleString('vi-VN'):'—'}
+                {gia.phanTram!=null?` (${gia.phanTram>0?'+':''}${gia.phanTram.toFixed(2)}%)`:''}
+                <span style={{fontWeight:600,color:'#94a3b8'}}> so với hôm trước</span>
+              </span>
+              <div style={{flex:1}}/>
+              <span style={{fontSize:'.7rem',fontWeight:700,color:'#475569'}} className="mono">
+                Hôm nay: mở {qd(gia.mo)} · cao {qd(gia.cao)} · thấp {qd(gia.thap)}
+                {gia.kl!=null&&<> · khớp {gia.kl.toLocaleString('vi-VN')} lô ≈ {(gia.kl*mInfo.lo).toLocaleString('vi-VN')} tấn</>}
+              </span>
+            </div>
           </div>
-        )}
+          );
+        })()}
 
         {(canhBao||loi)&&(
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,fontSize:'.68rem',
