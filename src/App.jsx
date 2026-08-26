@@ -1267,8 +1267,15 @@ const App=()=>{
     // SỬA #2 (R6): Sync All cũng tải Lịch sử Sàn từ CLOUD (GitHub /floor/history.json) — chế độ silent (không bật modal).
     if(which==='all'){
       try{ await loadFloorHistoryFromGithub(true); }catch(e3){console.warn('Floor history cloud:',e3.message);}
+      // SỬA 26/08: Sync All trước đây KHÔNG tải lại giá thị trường (SMM/LME/SHFE
+      // đọc qua Apps Script ?action=market) — nên cơ chế tự sync 20 phút (R8)
+      // đồng bộ đủ mọi thứ TRỪ giá: badge báo "vừa xong" lúc 14:23 mà SMM vẫn
+      // là giá hôm trước, người dùng phải bấm "Tải lại giá" bằng tay. Nay mọi
+      // đường đi qua Sync All (tự sync lúc mở app, R8 định kỳ + khi quay lại
+      // tab, nút Sync All, nút Làm mới bảng GĐ) đều kéo giá theo.
+      try{ await loadMarket(); }catch(e4){console.warn('Market:',e4.message);}
     }
-  },[loadFloorHistoryFromGithub]);
+  },[loadFloorHistoryFromGithub,loadMarket]);
 
   // ── GĐ1: TỰ ĐỘNG Sync All khi mở app (sau khi xác thực GitHub xong) ──
   const autoSyncedRef=useRef(false);

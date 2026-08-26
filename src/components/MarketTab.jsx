@@ -19,8 +19,11 @@ export const MarketTab=({
   const [marketAlloy,setMarketAlloy]=useState('ALL');
   const [marketRange,setMarketRange]=useState({preset:'90',from:'',to:''}); // preset: 30|90|180|ALL|custom
   // TQ HỦY hoàn thuế XK nhôm từ 01/12/2024 (anh Huy xác nhận) → NCC chào theo SMM GỒM VAT.
-  // Mặc định TẮT trừ VAT; chỉ bật khi soi lịch sử các đợt mua TRƯỚC 12/2024.
-  const [smmExVat,setSmmExVat]=useState(false);
+  // Mặc định BẬT trừ VAT 13% (yêu cầu người dùng 26/08/2026) — phòng mua đọc
+  // SMM theo mặt bằng không thuế cho khớp cách so với giá nhập, và đồng nhất
+  // với tab Biểu đồ Kỹ thuật (nơi "Bóc VAT" cũng bật sẵn). Vẫn tắt được khi
+  // cần soi lịch sử các đợt mua trước 12/2024 theo giá gồm VAT.
+  const [smmExVat,setSmmExVat]=useState(true);
   const marketChartRef=useRef(null);const marketChartInst=useRef(null);
   const smmFactor=smmExVat?1/1.13:1;
   // Dòng giá tăng dần theo ngày, lọc theo khoảng thời gian đang chọn
