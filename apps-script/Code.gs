@@ -47,7 +47,7 @@ function skuKey_(o){
 // Ngày 22/08 đã mất một vòng UAT vì tưởng đã deploy bản mới nhưng Web App vẫn
 // chạy code cũ (bấm "New deployment" sinh URL MỚI, app vẫn gọi URL cũ).
 // Nhìn con số này trong thông báo là biết ngay bản nào đang chạy.
-const PHIEN_BAN = '2026-08-22b';
+const PHIEN_BAN = '2026-09-14';
 
 // ═══ CHUẨN HOÁ DÙNG CHUNG — bản sao của src/lib/chuanhoa.js ═══
 // PHẢI khớp với bản trên trình duyệt. tools/kiem-minmax.mjs so hai bản với
@@ -544,11 +544,14 @@ function skuLabel_(o){ return [o.alloy, o.temper, o.thickness + 'x' + o.width + 
 // ───────────────────────── CẢNH BÁO SÁNG 8H ─────────────────────────
 function setupTriggers(){
   ScriptApp.getProjectTriggers().forEach(t => {
-    if (['checkDailyAlerts','fetchMarketPrices'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
+    if (['checkDailyAlerts','fetchMarketPrices','fetchSMMSang'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('checkDailyAlerts').timeBased().everyDays(1).atHour(8).create();
-  ScriptApp.newTrigger('fetchMarketPrices').timeBased().everyDays(1).atHour(12).create(); // GĐ3a: sau khi SMM công bố ~10h30 VN
-  Logger.log('✓ Đã tạo lịch: checkDailyAlerts ~8h sáng, fetchMarketPrices ~12h trưa');
+  ScriptApp.newTrigger('fetchMarketPrices').timeBased().everyDays(1).atHour(12).create(); // GĐ3a: lượt chốt LME/SHFE/SMM ~12h30 VN
+  // 14/09: lượt SÁNG chỉ lấy SMM. Trigger 30 phút chạy cả ngày nhưng hàm tự thoát ngoài khung
+  // 09:00–12:29 VN ngày làm việc, và thoát ngay khi hôm nay đã có SMM → thực tế chỉ tốn 1–3 lượt/ngày.
+  ScriptApp.newTrigger('fetchSMMSang').timeBased().everyMinutes(30).create();
+  Logger.log('✓ Đã tạo lịch: checkDailyAlerts ~8h sáng, fetchSMMSang mỗi 30 phút (chỉ chạy 9h–12h29 ngày làm việc), fetchMarketPrices ~12h trưa');
 }
 
 function checkDailyAlerts(){
@@ -755,8 +758,14 @@ function fetchMarketPrices(){
   let shfeClose = shfe ? parseFloat(shfe.close_price || shfe.settlement_price) : null;
   if (lmeCash == null)   lmeCash   = step('LME dự phòng (westmetall)',  fetchLMEFallback_);
   if (shfeClose == null) shfeClose = step('SHFE dự phòng (shfe.com.cn)', fetchSHFEFallback_);
-  const smmAvg  = smm ? parseFloat(smm.average)   : null;
-  const smmMove = smm ? parseFloat(smm.move || 0) : null;
+  // 14/09: worthwill 'current' chỉ là giá MỚI NHẤT, không hứa là hôm nay. Thứ 7/CN/lễ TQ nó vẫn trả
+  // giá phiên trước → trước đây ghi thành giá "hôm nay" (12–13/09 mang giá 11/09). Nay chỉ nhận
+  // khi date == hôm nay; không thì để trống, doGet tự lấp bằng giá gần nhất cho app.
+  const homNay = Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd');
+  const smmOk  = !!(smm && String(smm.date).slice(0, 10) === homNay);
+  if (smm && !smmOk) Logger.log('⚠ SMM worthwill còn ngày ' + smm.date + ' ≠ ' + homNay + ' (chưa đăng / nghỉ) — để trống');
+  const smmAvg  = smmOk ? parseFloat(smm.average)   : null;
+  const smmMove = smmOk ? parseFloat(smm.move || 0) : null;
   writeMarketRow_({ lme: lmeCash, shfe: shfeClose, smm: smmAvg, smmMove: smmMove, usd: fx.usd, cny: fx.cny });
   Logger.log('KẾT QUẢ: LME=' + lmeCash + ' SHFE=' + shfeClose + ' SMM=' + smmAvg + ' USD=' + fx.usd + ' CNY=' + fx.cny + ' — tổng ' + Math.round((Date.now() - t0) / 1000) + 's');
 }
@@ -774,7 +783,10 @@ function writeMarketRow_(v){
   const today = Utilities.formatDate(new Date(), 'GMT+7', 'yyyy-MM-dd');
   let row = [today, v.lme, v.shfe, v.smm, v.smmMove, smmUsd, v.usd, v.cny, Utilities.formatDate(new Date(), 'GMT+7', 'HH:mm')];
   const last = sh.getLastRow();
-  if (last > 1 && String(sh.getRange(last, 1).getValue()).slice(0, 10) === today){
+  // SỬA 14/09: Sheets tự đổi ô date thành kiểu Date → String(Date) = "Wed Sep 10 2026…", so với
+  // "2026-09-10" không bao giờ khớp → mỗi lượt lại append 1 dòng (25/08–13/09 mỗi ngày 2–4 dòng trùng)
+  // và cơ chế "null không xoá số cũ" cũng chết theo. isoNgay_ đưa cả hai về yyyy-MM-dd trước khi so.
+  if (last > 1 && isoNgay_(sh.getRange(last, 1).getValue()) === today){
     // cùng ngày → ghi đè, nhưng KHÔNG xóa giá trị cũ bằng null (nguồn tạm chết vẫn giữ số buổi trước)
     const old = sh.getRange(last, 1, 1, row.length).getValues()[0];
     row = row.map(function(x, i){ return (x == null || x === '') ? old[i] : x; });
@@ -783,6 +795,43 @@ function writeMarketRow_(v){
     sh.appendRow(row);
   }
   return { ok: true, msg: 'Đã ghi giá ngày ' + today };
+}
+function isoNgay_(v){
+  if (v instanceof Date) return Utilities.formatDate(v, 'GMT+7', 'yyyy-MM-dd');
+  return String(v == null ? '' : v).slice(0, 10);
+}
+
+// ═══ 14/09: LƯỢT SÁNG — chỉ lấy SMM, mỗi 30 phút trong khung 09:00–12:29 VN ngày làm việc ═══
+// VÌ SAO CÓ HÀM NÀY: đo 2 tuần (01–13/09) cột fetched_at + lịch sử chạy trên GitHub: cron 9:45 và
+// 10:30 của market-fetch.yml thực tế chạy ~14:30 và ~15:15 (GitHub trễ đều 4,5–5 giờ, ngày nào cũng
+// vậy), còn trigger fetchMarketPrices chỉ nổ ~12:33. Kết quả: trước 12:33 KHÔNG có gì ghi SMM, dù
+// worthwill đã có giá hôm nay từ ~09:30–11:00. Trigger Apps Script chạy đúng giờ và worthwill sống 1s
+// từ IP Google (testMarketSources 10/06) → lấy thẳng từ đây, không nhờ GitHub nữa.
+function fetchSMMSang(){
+  const now  = new Date();
+  const dow  = parseInt(Utilities.formatDate(now, 'GMT+7', 'u'), 10);  // 1=T2 … 7=CN
+  const phut = parseInt(Utilities.formatDate(now, 'GMT+7', 'HH'), 10) * 60 + parseInt(Utilities.formatDate(now, 'GMT+7', 'mm'), 10);
+  if (dow > 5 || phut < 9 * 60 || phut >= 12 * 60 + 30) return;   // ngoài khung → thoát im lặng
+  const today = Utilities.formatDate(now, 'GMT+7', 'yyyy-MM-dd');
+  const sh = ss_().getSheetByName(MARKET_SHEET);
+  if (sh && sh.getLastRow() > 1){
+    const last = sh.getRange(sh.getLastRow(), 1, 1, 4).getValues()[0];
+    if (isoNgay_(last[0]) === today && parseFloat(last[3]) > 0){ Logger.log('SMM ' + today + ' đã có (' + last[3] + ') — bỏ qua'); return; }
+  }
+  const smm = smmHomNay_(today);
+  if (!smm){ Logger.log('SMM chưa đăng giá ' + today + ' — chờ lượt 30 phút sau'); return; }
+  const fx = fetchFxRates_();
+  writeMarketRow_({ lme: null, shfe: null, smm: smm.avg, smmMove: smm.move, usd: fx.usd, cny: fx.cny });
+  Logger.log('✓ SMM ' + today + ' = ' + smm.avg + ' (' + (smm.move >= 0 ? '+' : '') + smm.move + ') ghi lúc ' + Utilities.formatDate(now, 'GMT+7', 'HH:mm'));
+}
+// worthwill 'current' là giá MỚI NHẤT, không hứa là hôm nay. Chỉ nhận khi date == hôm nay (giờ VN).
+function smmHomNay_(today){
+  const c = wwCurrent_('smm');
+  if (!c) return null;
+  if (String(c.date).slice(0, 10) !== today){ Logger.log('worthwill SMM còn ngày ' + c.date + ' ≠ ' + today); return null; }
+  const avg = parseFloat(c.average);
+  if (!(avg > 0)) return null;
+  return { avg: avg, move: parseFloat(c.move || 0) };
 }
 
 // ═══ R3: BACKFILL lịch sử giá (chạy tay 1 lần; chạy lại = xóa & dựng lại các dòng backfill) ═══
@@ -969,8 +1018,27 @@ function doGet(e){
     const data = sh.getDataRange().getValues();
     const H = data[0];
     const n = Math.min(parseInt(p.n) || 30, data.length - 1);
-    const rows = data.slice(-n).reverse().map(r => { const o = {}; H.forEach((h, i) => o[h] = r[i] instanceof Date ? Utilities.formatDate(r[i], 'GMT+7', 'yyyy-MM-dd') : r[i]); return o; });
-    return json_({ ok: true, rows: rows });
+    // 14/09: LẤP Ô TRỐNG bằng giá gần nhất phía trên (forward-fill) cho mọi cột giá.
+    // Từ nay sheet ghi trung thực: sáng chỉ có SMM (LME/SHFE trống tới 12:33), thứ 7/CN/lễ SMM
+    // trống. App đọc marketData[0] thẳng → nếu không lấp sẽ hiện "0 ¥/t". Lấp ở đây cho app giữ
+    // đúng ngữ nghĩa cũ "giá gần nhất đã biết"; kèm smm_date để biết SMM đó thật ra của ngày nào.
+    const iD = H.indexOf('date'), iS = H.indexOf('smm_cny'), iF = H.indexOf('fetched_at');
+    const mang = {}; let smmDate = '';
+    const full = data.slice(1).map(r => {
+      const o = {};
+      H.forEach((h, i) => {
+        let v = r[i] instanceof Date ? Utilities.formatDate(r[i], 'GMT+7', 'yyyy-MM-dd') : r[i];
+        if (i !== iD && i !== iF){
+          if (v === '' || v == null){ v = (mang[h] != null ? mang[h] : ''); }
+          else mang[h] = v;
+        }
+        o[h] = v;
+      });
+      if (iS >= 0 && r[iS] !== '' && r[iS] != null) smmDate = o[H[iD]];
+      o.smm_date = smmDate;
+      return o;
+    });
+    return json_({ ok: true, rows: full.slice(-n).reverse() });
   }
   return json_({ ok: false, error: 'Action không hợp lệ' });
 }
