@@ -233,6 +233,8 @@ function doPost(e){
     if (body.action === 'updatePORow')        return json_(updatePORow_(body.payload || {}, by));
     if (body.action === 'deletePORow')        return json_(deletePORow_(body.payload || {}, by));
     if (body.action === 'deletePO')           return json_(deletePO_(body.payload || {}, by));
+    if (body.action === 'setCashFlow')       return json_(setCashFlow_(body.payload || {}, by));
+    if (body.action === 'setInventory')      return json_(setInventory_(body.payload || {}, by));
     if (body.action === 'storeMarket'){ // GĐ3a plan B: GitHub Actions kéo giá rồi đẩy vào đây
       const p = body.payload || {};
       const n = x => { const f = parseFloat(x); return isNaN(f) ? null : f; };
@@ -1103,4 +1105,116 @@ function alertCIFvsMarket_(alerts){
 function testNhanh(){
   Logger.log('✓ Apps Script chạy bình thường lúc ' + new Date());
   Logger.log('✓ Đọc được spreadsheet: ' + ss_().getName());
+}
+
+// ═══ PATCH dong_bo_he_thong.py — ghi de CashFlow (gid 127496102) ═══
+function setCashFlow_(p, by){
+  const values = Array.isArray(p.values) ? p.values : [];
+  if (values.length < 3) return { ok: false, error: 'Thiếu dữ liệu (cần ≥3 hàng: tháng, header, các dòng KEY)' };
+  const width = Math.max.apply(null, values.map(function(r){ return r.length; }));
+  const grid = values.map(function(r){
+    const o = r.slice();
+    while (o.length < width) o.push('');
+    return o;
+  });
+  const h2 = grid[1].map(function(c){ return String(c || '').trim().toUpperCase(); });
+  if (h2.indexOf('KEY') < 0) return { ok: false, error: 'Hàng header (hàng 2) thiếu cột KEY — sai bố cục' };
+  const sh = sheetByGid_(GID_CASHFLOW);
+  const oldRows = sh.getDataRange().getNumRows();
+  sh.clearContents();                                   // tab CashFlow chỉ chứa dữ liệu, không công thức
+  sh.getRange(1, 1, grid.length, width).setValues(grid);
+  audit_(by, 'GHI ĐÈ CASHFLOW', 'Tab CashFlow (dong_bo_he_thong.py)',
+         oldRows + ' hàng cũ', grid.length + ' hàng mới × ' + width + ' cột');
+  return { ok: true, msg: 'Đã ghi ' + grid.length + ' hàng × ' + width + ' cột vào tab CashFlow' };
+}
+
+// ═══ PATCH dong_bo_he_thong.py — ghi de Inventory (gid 0), co chot chan ═══
+function setInventory_(p, by){
+  const HDR = ['ID','alloy','temper','thickness','width','length','Coating',
+               'status','qtyKg','avgCost','ExpectedDeliveryDate'];
+  const NCOL = HDR.length;
+  const values = Array.isArray(p.values) ? p.values : [];
+  if (values.length < 2) return { ok:false, error:'Thiếu dữ liệu (cần ≥ 1 hàng header + 1 dòng hàng)' };
+
+  // ── 1. Tìm tab gid 0 (không dùng sheetByGid_ vì gid 0 là giá trị falsy) ──
+  const ss = SpreadsheetApp.getActive();
+  const all = ss.getSheets();
+  let sh = null;
+  for (let i = 0; i < all.length; i++) { if (all[i].getSheetId() === 0) { sh = all[i]; break; } }
+  if (!sh) sh = ss.getSheetByName('Inventory');
+  if (!sh) return { ok:false, error:'Không tìm thấy tab Inventory (gid 0)' };
+
+  // ── 2. Header gửi lên phải khớp CHUẨN và khớp header đang có trên tab ──
+  const hIn = values[0].map(function(c){ return String(c == null ? '' : c).trim(); });
+  if (hIn.length !== NCOL) return { ok:false, error:'Header gửi lên có ' + hIn.length + ' cột, cần đúng ' + NCOL };
+  for (let i = 0; i < NCOL; i++) {
+    if (hIn[i] !== HDR[i]) return { ok:false, error:'Header cột ' + (i+1) + ' là "' + hIn[i] + '", chuẩn phải là "' + HDR[i] + '"' };
+  }
+  const hTab = sh.getRange(1, 1, 1, NCOL).getValues()[0]
+                 .map(function(c){ return String(c == null ? '' : c).trim(); });
+  for (let i = 0; i < NCOL; i++) {
+    if (hTab[i] !== HDR[i]) {
+      return { ok:false, error:'Header TRÊN TAB cột ' + (i+1) + ' là "' + hTab[i] + '" ≠ "' + HDR[i] +
+                              '" — tab đã bị đổi cấu trúc, DỪNG để anh Huy kiểm tra' };
+    }
+  }
+
+  // ── 3. Kiểm từng dòng dữ liệu ──
+  const body = values.slice(1);
+  const OK_STATUS = { 'IN_STOCK':1, 'IN_TRANSIT':1 };
+  const seenStock = {};
+  const loi = [];
+  const grid = [];
+  for (let r = 0; r < body.length; r++) {
+    const row = body[r].slice();
+    while (row.length < NCOL) row.push('');
+    if (row.length > NCOL) return { ok:false, error:'Dòng ' + (r+2) + ' có ' + row.length + ' cột, cần đúng ' + NCOL };
+    const id = String(row[0] == null ? '' : row[0]).trim();
+    const st = String(row[7] == null ? '' : row[7]).trim();
+    const th = row[3];
+    const qty = row[8], cost = row[9];
+    if (id.length !== 26)          loi.push('dòng ' + (r+2) + ': ID "' + id + '" dài ' + id.length + ' ≠ 26 ký tự');
+    else if (!OK_STATUS[st])       loi.push('dòng ' + (r+2) + ': status "' + st + '" không hợp lệ');
+    else if (typeof qty !== 'number' || !(qty > 0))  loi.push('dòng ' + (r+2) + ' (' + id + '): qtyKg = ' + qty + ' (phải là số > 0)');
+    else if (typeof cost !== 'number' || !(cost > 0)) loi.push('dòng ' + (r+2) + ' (' + id + '): avgCost = ' + cost + ' (phải là số > 0)');
+    else if (typeof th !== 'string' || th.indexOf('.') < 0) loi.push('dòng ' + (r+2) + ' (' + id + '): thickness = ' + JSON.stringify(th) + ' (phải là CHUỖI có dấu chấm)');
+    else if (st === 'IN_STOCK') {
+      if (seenStock[id]) loi.push('dòng ' + (r+2) + ': ID ' + id + ' bị lặp trong IN_STOCK');
+      seenStock[id] = 1;
+    }
+    grid.push(row);
+    if (loi.length >= 8) break;      // báo tối đa 8 lỗi cho gọn
+  }
+  if (loi.length) return { ok:false, error:'Dữ liệu KHÔNG hợp lệ, không ghi gì cả — ' + loi.join(' | ') };
+
+  // ── 4. Chốt chặn co ngót: mất quá nửa danh mục là dấu hiệu build hỏng ──
+  const lastRow = sh.getLastRow();
+  const oldRows = Math.max(0, lastRow - 1);
+  if (!p.force && oldRows >= 10 && grid.length < oldRows * 0.5) {
+    return { ok:false, error:'Dữ liệu mới chỉ có ' + grid.length + ' dòng trong khi tab đang có ' + oldRows +
+                            ' dòng (mất >50%). Nghi build hỏng nên KHÔNG ghi. Muốn ghi thật thì gửi kèm force:true.' };
+  }
+
+  // ── 5. Xoá vùng dữ liệu cũ (giữ header) rồi ghi mới ──
+  if (oldRows > 0) sh.getRange(2, 1, oldRows, NCOL).clearContent();
+  const n = grid.length;
+  // Định dạng TRƯỚC khi ghi, nếu không Sheets tự nuốt "0.17" -> 0,17 số và "C" -> lỗi
+  sh.getRange(2, 1, n, 1).setNumberFormat('@');   // A  ID
+  sh.getRange(2, 4, n, 1).setNumberFormat('@');   // D  thickness  (BẮT BUỘC text)
+  sh.getRange(2, 5, n, 1).setNumberFormat('0');   // E  width
+  sh.getRange(2, 7, n, 2).setNumberFormat('@');   // G,H Coating + status
+  sh.getRange(2, 9, n, 2).setNumberFormat('0');   // I,J qtyKg + avgCost (KHÔNG dấu phân cách)
+  sh.getRange(2, 11, n, 1).setNumberFormat('@');  // K  ExpectedDeliveryDate
+  sh.getRange(2, 1, n, NCOL).setValues(grid);
+
+  let stock = 0, transit = 0, kgStock = 0, kgTransit = 0;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i][7] === 'IN_STOCK') { stock++; kgStock += grid[i][8]; }
+    else { transit++; kgTransit += grid[i][8]; }
+  }
+  const tomTat = stock + ' IN_STOCK (' + Math.round(kgStock) + ' kg) + ' +
+                 transit + ' IN_TRANSIT (' + Math.round(kgTransit) + ' kg)';
+  audit_(by, 'GHI ĐÈ INVENTORY', 'Tab Inventory gid 0 (dong_bo_he_thong.py)',
+         oldRows + ' dòng cũ', n + ' dòng mới — ' + tomTat);
+  return { ok:true, msg:'Đã ghi đè ' + oldRows + ' → ' + n + ' dòng: ' + tomTat };
 }
