@@ -34,7 +34,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [demNet,setDemNet]=useState({ngang:0,xuHuong:0,tong:0});
   const [dangChon,setDangChon]=useState(null);// id nét đang chọn (để xoá bằng phím Delete)
   const [hienSMM,setHienSMM]=useState(true);
-  const [bocVat,setBocVat]=useState(true);    // mặc định BẬT — xem mục VAT trong lopphu.js
+  const [bocVat,setBocVat]=useState(false);   // 14/09: mặc định TẮT (yêu cầu anh Huy) — đọc nến SHFE và đường SMM theo giá gồm VAT như bảng gốc; xem mục VAT trong lopphu.js
 
   const boxRef=useRef(null);
   const manHinhRef=useRef(null);   // vùng đưa lên toàn màn hình (gồm cả thanh công cụ)
