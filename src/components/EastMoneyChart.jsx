@@ -1,8 +1,9 @@
 import React from 'react';
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 import {KHUNG_TG,MA_NHOM,khungTuPeriod,layGiaHienTai,layNen,timKhung,timMa,trangThaiPhien} from '../lib/eastmoney';
-import {CONG_CU,KIEU_VE,demVe,khoiPhucVe,luuVe,xoaHet} from '../lib/vekythuat';
+import {CONG_CU,KIEU_VE,OVERLAY_GANN,demVe,khoiPhucVe,luuVe,xoaHet} from '../lib/vekythuat';
 import {CHI_BAO_SMM,KHUNG_CO_SMM,NGUON,VAT_TQ,dungTraCuu,taoTraSMM,vungCoSMM} from '../lib/lopphu';
+import {BO_MA,CHI_BAO_ICHIMOKU,DICH_ICHIMOKU,apChiBao,docChiBao,luuChiBao} from '../lib/chibao';
 
 // ═══ TAB 📊 BIỂU ĐỒ KỸ THUẬT — nến nhôm SHFE (GĐ2) ═══
 // klinecharts chạm `window` NGAY LÚC IMPORT → phải nạp động trong useEffect,
@@ -17,7 +18,7 @@ const NHAN_NGUON={mang:'trực tiếp',ram:'nhớ tạm',phien:'phiên trước'
 let _kc=null;
 const napKLine=async()=>(_kc||(_kc=await import('klinecharts')));
 
-let _daDangKy=false;   // registerIndicator là toàn cục, chỉ đăng ký 1 lần
+let _daDangKy=false;   // registerIndicator/registerOverlay là toàn cục, chỉ đăng ký 1 lần
 
 export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [ma,setMa]=useState('alm');
@@ -29,12 +30,14 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const [soNen,setSoNen]=useState(0);
   const [gia,setGia]=useState(null);
   const [phien,setPhien]=useState(()=>trangThaiPhien());
-  const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng' | 'kg' | 'fb'
+  const [congCu,setCongCu]=useState('');      // '' | 'xh' | 'ng' | 'kg' | 'fb' | 'gn'
   const [toanManHinh,setToanManHinh]=useState(false);
   const [demNet,setDemNet]=useState({ngang:0,xuHuong:0,tong:0});
   const [dangChon,setDangChon]=useState(null);// id nét đang chọn (để xoá bằng phím Delete)
   const [hienSMM,setHienSMM]=useState(true);
   const [bocVat,setBocVat]=useState(false);   // 14/09: mặc định TẮT (yêu cầu anh Huy) — đọc nến SHFE và đường SMM theo giá gồm VAT như bảng gốc; xem mục VAT trong lopphu.js
+  // Chỉ báo MA / MACD / Ichimoku — lưu localStorage 'pakd_chart_chibao', mở lại tab là khôi phục
+  const [chiBao,setChiBao]=useState(()=>docChiBao());
 
   const boxRef=useRef(null);
   const manHinhRef=useRef(null);   // vùng đưa lên toàn màn hình (gồm cả thanh công cụ)
@@ -48,10 +51,13 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const chonRef=useRef(null);
   const vatRef=useRef(true);
   const loaderRef=useRef(null);   // giữ để ép nạp lại (xem napLai)
+  const chiBaoRef=useRef(chiBao); // effect khởi tạo (bất đồng bộ) đọc trạng thái MỚI NHẤT qua ref
+  const lechGocRef=useRef(null);  // khoảng trống bên phải mặc định của klinecharts (80px) — trả lại khi tắt Ichimoku
+  const daLechRef=useRef(false);  // true = đang nới khoảng trống phải cho mây Ichimoku
 
   const kh=timKhung(khungK);
   const mInfo=timMa(ma);
-  maRef.current=ma; khungRef.current=khungK;
+  maRef.current=ma; khungRef.current=khungK; chiBaoRef.current=chiBao;
   const heSoVat=bocVat?1/(1+VAT_TQ):1;
   vatRef.current=heSoVat;
   const khungHoTro=KHUNG_CO_SMM.includes(khungK);
@@ -61,6 +67,26 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
   const vung=useMemo(()=>vungCoSMM(traCuu),[traCuu]);
 
   const capNhatDem=useCallback(()=>setDemNet(demVe(maRef.current,khungRef.current)),[]);
+
+  // Mây Ichimoku vẽ TỚI 26 nến sau nến cuối → phải chừa khoảng trống bên phải
+  // đủ ~26 nến, nếu không phần mây tương lai nằm ngoài khung nhìn.
+  // setOffsetRightDistance tính bằng PIXEL nên phải đặt lại khi độ rộng nến
+  // hoặc bề ngang khung đổi. Trần 50% bề ngang để điện thoại vẫn còn chỗ cho nến.
+  // Đọc trạng thái qua ref → gọi được từ ResizeObserver (sống ngoài vòng render).
+  const datLech=useCallback(()=>{
+    const chart=chartRef.current;
+    if(!chart) return;
+    if(lechGocRef.current==null) lechGocRef.current=chart.getOffsetRightDistance();
+    if(chiBaoRef.current.ichimoku){
+      const w=chart.getSize('candle_pane')?.width||0;
+      const can=(DICH_ICHIMOKU+3)*(chart.getBarSpace()?.bar||8);
+      chart.setOffsetRightDistance(Math.max(lechGocRef.current,w>0?Math.min(can,w*.5):can));
+      daLechRef.current=true;
+    }else if(daLechRef.current){
+      chart.setOffsetRightDistance(lechGocRef.current);   // tắt Ichimoku → trả lại khoảng trống cũ
+      daLechRef.current=false;
+    }
+  },[]);
 
   // ── Toast góc màn hình ──────────────────────────────────────────────────
   // Trước đây mất mạng là hiện một dải VÀNG to và một dải ĐỎ to đè lên đầu
@@ -83,9 +109,16 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     let huy=false,chart=null;
     (async()=>{
       const kc=await napKLine();
-      const {init,dispose,registerIndicator}=kc;
-      // series:'price' -> chỉ báo dùng CHUNG thang giá với nến, không cần trục phụ
-      if(!_daDangKy){ registerIndicator(CHI_BAO_SMM); _daDangKy=true; }
+      const {init,dispose,registerIndicator,registerOverlay}=kc;
+      // series:'price' -> chỉ báo dùng CHUNG thang giá với nến, không cần trục phụ.
+      // Ichimoku + quạt Gann là template thuần trong lib/, chỉ đăng ký ở đây
+      // (SAU napKLine) — import klinecharts ở đầu file sẽ làm vỡ smoke test.
+      if(!_daDangKy){
+        registerIndicator(CHI_BAO_SMM);
+        registerIndicator(CHI_BAO_ICHIMOKU);
+        registerOverlay(OVERLAY_GANN);
+        _daDangKy=true;
+      }
       if(huy||!boxRef.current) return;
       // Phòng khi vùng chứa còn chart cũ (hot-reload, mount lại): hủy trước
       // rồi mới tạo, tránh chồng 2 biểu đồ + 2 pane VOL trùng nhau.
@@ -120,8 +153,11 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
       // đó MA bị đẩy xuống pane riêng nên nhìn như "mất" MA trên biểu đồ nến.
       // Tham số thứ 2 isStack=true BẮT BUỘC: mặc định false khiến chỉ báo mới
       // THAY THẾ chỉ báo cũ trên cùng pane (MA từng bị SMM đè mất).
-      chart.createIndicator({name:'MA',paneId:'candle_pane'},true);
+      // MA (và Ichimoku) tạo trong apChiBao với đúng quy tắc trên + bộ chu kỳ đã lưu.
+      // VOL tạo TRƯỚC để pane MACD (nếu anh đã bật) nằm dưới VOL.
       chart.createIndicator({name:'VOL'});
+      lechGocRef.current=chart.getOffsetRightDistance();   // mặc định 80px, đo trước khi có nến
+      apChiBao(chart,chiBaoRef.current);
 
       // setDataLoader phải đặt ĐÚNG MỘT LẦN. Nếu gọi lại mỗi lần đổi khung,
       // KLineChart v10 CỘNG DỒN dữ liệu cũ thay vì thay thế — nến 1 giờ từng
@@ -174,9 +210,17 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
       // Hook chẩn đoán khi chạy npm run dev: mở Console gõ __bieuDo.getDataList()
       if(import.meta.env?.DEV) window.__bieuDo=chart;
     })();
-    // Đổi cỡ cửa sổ / mở-đóng panel → vẽ lại cho khớp
+    // Đổi cỡ cửa sổ / mở-đóng panel → vẽ lại cho khớp.
+    // Riêng khi BỀ NGANG đổi (xoay điện thoại, kéo cửa sổ) thì tính lại khoảng
+    // trống cho mây Ichimoku — đợi 1 nhịp vì layout của klinecharts chạy sau.
+    let rongCu=0;
     const ro=typeof ResizeObserver!=='undefined'
-      ? new ResizeObserver(()=>chartRef.current?.resize()) : null;
+      ? new ResizeObserver((ds)=>{
+          chartRef.current?.resize();
+          const r=ds?.[0]?.contentRect?.width||0;
+          if(rongCu&&Math.abs(r-rongCu)>1) requestAnimationFrame(datLech);
+          rongCu=r;
+        }) : null;
     if(ro&&boxRef.current) ro.observe(boxRef.current);
     return()=>{
       huy=true;
@@ -264,6 +308,23 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     const w=chart.getSize('candle_pane')?.width;
     if(w>0){ chart.setBarSpace(Math.max(1,w/Math.min(400,Math.max(60,traCuu.length)))); chart.scrollToRealTime(); }
   },[batSMM,bocVat,traCuu,soNen]);
+
+  // ── Chỉ báo MA / MACD / Ichimoku ─────────────────────────────────────────
+  // Chỉ báo gắn với CHART chứ không với dữ liệu: đổi mã/khung (setSymbol/
+  // setPeriod) hay gạt Bóc VAT (nạp lại nến) thì klinecharts tự tính lại trên
+  // nến mới — không cần tạo lại. apChiBao idempotent nên gọi lại vô hại.
+  const doiChiBao=useCallback((thay)=>setChiBao(c=>({...c,...thay})),[]);
+  useEffect(()=>{
+    luuChiBao(chiBao);
+    const chart=chartRef.current;
+    if(!chart) return;                       // lần đầu: effect khởi tạo tự áp theo chiBaoRef
+    apChiBao(chart,chiBao);
+  },[chiBao]);
+
+  // Khoảng trống phải cho mây Ichimoku (xem datLech): đặt lại khi bật/tắt và
+  // sau mỗi lần nến về (soNen) — effect này khai báo SAU effect SMM nên chạy
+  // sau nó, tức là sau khi setBarSpace đã đổi độ rộng nến.
+  useEffect(()=>{ datLech(); },[chiBao.ichimoku,soNen,batSMM,traCuu,datLech]);
 
   // ── Công cụ vẽ ────────────────────────────────────────────────────────
   const chonCongCu=useCallback((t)=>{
@@ -434,6 +495,33 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           </span>
         </div>
 
+        {/* Nhóm CHỈ BÁO — ngay dưới công cụ vẽ. Hàng riêng để thanh VẼ trên desktop
+            không bị đẩy xuống 2 dòng; trên điện thoại tự xuống dòng như các hàng khác. */}
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10,
+                     background:bg2,border:`1px solid ${border2}`,borderRadius:8,padding:'8px 10px'}}>
+          <span style={{fontSize:'.66rem',fontWeight:900,color:'#64748b'}}>CHỈ BÁO</span>
+          <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
+            <button onClick={()=>doiChiBao({ma:!chiBao.ma})} style={nut(chiBao.ma)}
+                    title="Đường trung bình động (MA) vẽ đè lên nến">MA</button>
+            <select value={chiBao.boMA} onChange={e=>doiChiBao({boMA:e.target.value,ma:true})}
+                    title="Chọn bộ chu kỳ MA (chọn là tự bật MA)"
+                    style={{fontSize:'.68rem',fontWeight:700,padding:'3px 6px',borderRadius:5,
+                            border:`1px solid ${border2}`,color:'#475569',opacity:chiBao.ma?1:.55}}>
+              {BO_MA.map(b=><option key={b.k} value={b.k}>{b.l}</option>)}
+            </select>
+            <button onClick={()=>doiChiBao({macd:!chiBao.macd})} style={nut(chiBao.macd)}
+                    title="MACD (12,26,9) ở ô riêng dưới khối lượng — DIF xanh dương, DEA cam, cột xanh = động lượng tăng / đỏ = giảm">MACD</button>
+            <button onClick={()=>doiChiBao({ichimoku:!chiBao.ichimoku})} style={nut(chiBao.ichimoku)}
+                    title="Mây Ichimoku (9,26,52) — mây vẽ vượt 26 phiên ra tương lai">☁ Ichimoku</button>
+          </div>
+          <div style={{flex:1}}/>
+          <span style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600}}>
+            {chiBao.ichimoku
+              ? 'Mây xanh = xu hướng tăng · giá nằm trên mây = tích cực'
+              : 'Bật/tắt và bộ MA được nhớ trên máy anh'}
+          </span>
+        </div>
+
         {/* Giá khớp mới nhất từ sàn — phải TỰ GIẢI THÍCH: người dùng từng hỏi
             "mấy con số này là gì", và giá từng hiện GỒM VAT trong khi trục nến
             bên dưới đang BÓC VAT — hai số vênh nhau ngay trên một màn hình.
@@ -480,7 +568,8 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
 
         {/* Khung vẽ KLineChart */}
         <div style={{position:'relative',background:'#fff',border:`1px solid ${border2}`,borderRadius:8}}>
-          <div ref={boxRef} style={{width:'100%',height:toanManHinh?'calc(100vh - 250px)':480}}/>
+          {/* +120px khi bật MACD để ô nến không bị bóp; toàn màn hình trừ thêm hàng CHỈ BÁO */}
+          <div ref={boxRef} style={{width:'100%',height:toanManHinh?'calc(100vh - 294px)':480+(chiBao.macd?120:0)}}/>
           {hienSMM&&!khungHoTro&&(
             <div style={{position:'absolute',left:12,bottom:10,zIndex:2,pointerEvents:'none',
                          background:'rgba(255,255,255,.86)',border:`1px solid ${border2}`,borderRadius:5,
@@ -507,6 +596,8 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
           khoảng hở giữa nó và nến SHFE chính là <b>basis</b>. Nét vẽ lưu trên máy anh: <b>đường ngang</b> dùng chung mọi khung
           thời gian (mức kháng cự 24.000 nhìn ở khung nào cũng là 24.000), còn <b>đường xu hướng</b>
           chỉ hiện đúng khung đã vẽ. Chọn một nét rồi bấm <b>Delete</b> để xoá.
+          {' '}Chỉ báo: <b>mây Ichimoku</b> <b style={{color:'#16a34a'}}>xanh</b> = xu hướng tăng, giá nằm trên mây = tích cực
+          (mây vẽ trước 26 phiên); <b>quạt Gann</b> — tia <b>1×1</b> là đường 45° chuẩn (1 đơn vị giá / 1 đơn vị thời gian).
         </div>
 
         {/* Tham chiếu chéo với sheet MARKET_PRICES */}

@@ -59,7 +59,7 @@ thu('MarketTab (rong)', React.createElement(MarketTab, {
 }), ['Thị trường']);
 
 thu('EastMoneyChart', React.createElement(EastMoneyChart, { marketData, ...chung }),
-    ['Biểu đồ Kỹ thuật', 'Nhôm Thượng Hải A00', 'Ngày', 'Bóc VAT', 'SMM giao ngay']);
+    ['Biểu đồ Kỹ thuật', 'Nhôm Thượng Hải A00', 'Ngày', 'Bóc VAT', 'SMM giao ngay', 'CHỈ BÁO', 'MACD', 'Ichimoku', 'Gann']);
 
 thu('EastMoneyChart (khong co marketData)', React.createElement(EastMoneyChart, { marketData:[], ...chung }),
     ['Biểu đồ Kỹ thuật', 'Chưa có số liệu SMM']);
