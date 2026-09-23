@@ -49,7 +49,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
     return sign+abs.toFixed(0);
   };
   return(
-  <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+  <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
     <div style={{maxWidth:'1100px',margin:'0 auto'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
         <div>
@@ -90,7 +90,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
         </div>
       )}
       {result&&(
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+      <div className="grid-2col" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
           <div className="card">
             <div className="sh"><Ic.Ship/>Phương án mua – Giá trị thanh toán</div>
@@ -126,7 +126,7 @@ const CashFlowTab=({result,inputs,cashFlowData,cfMode,setCFMode,cfManualWeek,set
             <div className="sh"><Ic.Alert/>Hạn mức tín dụng</div>
             {creditLimit?(
               <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                <div className="grid-kpi" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
                   {[
                     {l:'Tổng hạn mức',v:fB(totalCreditMax),c:'#1d4ed8'},
                     {l:'CN hiện tại',v:fB(actualAP),c:'#475569'},

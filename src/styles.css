@@ -105,3 +105,120 @@ select.inp option{background:#ffffff;}
   .print-table-a4 tfoot td{font-weight:bold;background-color:#f9f9f9 !important;-webkit-print-color-adjust:exact;}
   .text-green{color:#166534 !important;}.text-red{color:#991b1b !important;}.text-blue{color:#1d4ed8 !important;}
 }
+
+/* ═══════════════════ GIAO DIỆN ĐIỆN THOẠI (≤768px) ═══════════════════
+   Chỉ có hiệu lực khi màn hình ≤768px VÀ App gắn class .is-mobile (hook useIsMobile — src/lib/mobile.js),
+   <html> gắn .m-doc. Desktop (>768px) không đổi một pixel nào.
+   Inline style (JSX) thắng CSS thường → các chỗ cần đè inline phải dùng !important.
+   Thành phần riêng của mobile: components/MobileNav.jsx (header, thanh đáy, bottom-sheet "Thêm"). */
+@keyframes m-sheet-len{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes m-mo-nen{from{opacity:0}to{opacity:1}}
+@media (max-width:768px){
+  /* ── 1. Mở khoá cuộn cả trang (desktop: body 100vh + overflow hidden, cuộn trong từng panel) ── */
+  html.m-doc{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+  html.m-doc,html.m-doc body,html.m-doc #root{height:auto !important;min-height:100vh;min-height:100dvh;overflow:visible !important;}
+  .is-mobile.app-root{height:auto !important;min-height:100vh;min-height:100dvh;overflow:visible !important;}
+
+  /* ── 2. Header điện thoại (MobileHeader) — dính đầu trang khi cuộn ── */
+  .is-mobile .nav-tab{display:none !important;}
+  .is-mobile .mobile-header{position:sticky;top:0;z-index:7000;display:flex;align-items:center;gap:6px;flex-shrink:0;background:#fff;border-bottom:1px solid #e2e8f0;padding:4px max(10px,env(safe-area-inset-right)) 4px max(10px,env(safe-area-inset-left));padding-top:calc(4px + env(safe-area-inset-top));}
+  .is-mobile .m-logo{flex-shrink:0;width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#0d9488,#2563eb);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;color:#fff;font-family:'JetBrains Mono',monospace;}
+  .is-mobile .m-title{margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:900;font-size:15px;letter-spacing:-.02em;color:#0f172a;}
+  .is-mobile .m-title span{color:#0d9488;font-family:'JetBrains Mono',monospace;font-size:12px;}
+  .is-mobile .m-badge{flex-shrink:0;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;border-radius:13px;background:#f1f5f9;border:1px solid #e2e8f0;color:#475569;font-size:11px;font-weight:800;white-space:nowrap;}
+  .is-mobile .m-badge-ok{background:#f0fdf4;border-color:#86efac;color:#15803d;}
+  .is-mobile .m-badge-load{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;}
+  .is-mobile .m-badge-err{background:#fef2f2;border-color:#fca5a5;color:#b91c1c;}
+  .is-mobile .m-icon-btn{flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:40px;height:40px;padding:0 9px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#1d4ed8;font-size:13px;font-weight:800;cursor:pointer;font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;}
+  .is-mobile .m-icon-btn:disabled{opacity:.45;cursor:default;}
+  .is-mobile .m-more-btn{font-size:20px;line-height:1;color:#0f172a;}
+  .is-mobile .m-spin{display:inline-block;animation:spin .8s linear infinite;}
+  /* Dải tag kết quả ngay dưới header (chỉ tab PAKD Mua) — cuộn ngang */
+  .is-mobile .mobile-strip{flex-shrink:0;display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding:6px 10px;background:#fff;border-bottom:1px solid #e2e8f0;}
+  .is-mobile .mobile-strip::-webkit-scrollbar{display:none;}
+  .is-mobile .mobile-strip .tag{flex-shrink:0;}
+
+  /* ── 3. Thanh điều hướng đáy (dưới modal 9999 và #ceo 9000) ── */
+  .is-mobile .mobile-nav{position:fixed;left:0;right:0;bottom:0;z-index:8000;display:flex;height:calc(56px + env(safe-area-inset-bottom));padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);background:#fff;border-top:1px solid #e2e8f0;box-shadow:0 -2px 10px rgba(15,23,42,.06);}
+  .is-mobile .m-nav-item{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:4px 2px;border:none;background:transparent;color:#475569;cursor:pointer;font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;}
+  .is-mobile .m-nav-item.on{color:#1d4ed8;background:#eff6ff;box-shadow:inset 0 2px 0 #1d4ed8;}
+  .is-mobile .m-nav-ico{font-size:18px;line-height:1;}
+  .is-mobile .m-nav-lbl{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:800;}
+
+  /* ── 4. Bottom-sheet "Thêm" ── */
+  .is-mobile .m-sheet-overlay{position:fixed;inset:0;z-index:8500;display:flex;align-items:flex-end;background:rgba(15,23,42,.45);animation:m-mo-nen .18s ease-out;}
+  .is-mobile .m-sheet{width:100%;max-height:80vh;max-height:80dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:#fff;border-radius:14px 14px 0 0;padding:6px 12px calc(12px + env(safe-area-inset-bottom));box-shadow:0 -10px 30px rgba(15,23,42,.25);animation:m-sheet-len .22s ease-out;}
+  .is-mobile .m-sheet-grip{width:40px;height:4px;margin:4px auto 6px;border-radius:2px;background:#cbd5e1;}
+  .is-mobile .m-sheet-group{padding:10px 8px 4px;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.07em;color:#64748b;}
+  .is-mobile .m-sheet-item{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:10px;border:none;border-radius:9px;background:transparent;color:#0f172a;font-size:15px;font-weight:700;text-align:left;cursor:pointer;font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;}
+  .is-mobile .m-sheet-item:active{background:#f1f5f9;}
+  .is-mobile .m-sheet-item.on{background:#eff6ff;color:#1d4ed8;}
+  .is-mobile .m-sheet-item:disabled{opacity:.45;cursor:default;}
+  .is-mobile .m-sheet-ico{flex-shrink:0;width:26px;text-align:center;font-size:19px;}
+  .is-mobile .m-sheet-lbl{flex:1;min-width:0;}
+  .is-mobile .m-sheet-item small{font-size:12px;font-weight:700;color:#64748b;}
+  .is-mobile .m-sheet-item small.ok{color:#15803d;}
+  .is-mobile .m-sheet-item small.err{color:#b91c1c;}
+  .is-mobile .m-sheet-count{min-width:24px;height:22px;padding:0 7px;display:inline-flex;align-items:center;justify-content:center;border-radius:11px;background:#f3e8ff;border:1px solid #d8b4fe;color:#6d28d9;font-size:12px;font-weight:800;}
+  .is-mobile .m-sheet-close{display:block;width:100%;min-height:46px;margin-top:8px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;color:#334155;font-size:15px;font-weight:800;cursor:pointer;font-family:'Inter',sans-serif;}
+
+  /* ── 5. Thân app: xếp dọc, cuộn theo trang, chừa chỗ cho thanh đáy ── */
+  .is-mobile .app-body{flex-direction:column !important;min-height:0;overflow:visible !important;overflow-x:clip !important;padding-bottom:calc(72px + env(safe-area-inset-bottom));}
+  .is-mobile .tab-cols{flex-direction:column !important;height:auto !important;min-height:0 !important;}
+  /* Cột cố định (242px / 280px / cột giữa) → full chiều ngang, xếp chồng */
+  .is-mobile .pane{width:100% !important;max-width:100% !important;flex:none !important;height:auto !important;max-height:none !important;overflow:visible !important;border-right:0 !important;border-left:0 !important;border-bottom:1px solid #e2e8f0;}
+  /* Vùng cuộn trong có chiều cao cố định → bung hết, cuộn theo trang */
+  .is-mobile .scrollbox{flex:none !important;height:auto !important;max-height:none !important;overflow:visible !important;}
+  .is-mobile .tab-page{padding:12px 10px !important;}
+  .is-mobile .m-wrap{flex-wrap:wrap !important;row-gap:6px;}
+  /* Dự phòng: mọi hàng flex ngang (inline style) trong thân app & modal được xuống dòng thay vì tràn ngang;
+     phần tử flexShrink:0 được co lại khi một mình nó rộng hơn màn hình */
+  .is-mobile .app-body [style*="display: flex"]:not([style*="flex-direction: column"]),
+  .is-mobile .modal-box [style*="display: flex"]:not([style*="flex-direction: column"]){flex-wrap:wrap;}
+  .is-mobile .app-body [style*="flex-shrink: 0"],.is-mobile .modal-box [style*="flex-shrink: 0"]{flex-shrink:1 !important;}
+
+  /* ── Bảng: cuộn ngang trong chính bảng ── */
+  .is-mobile .tbl{display:block;max-width:100%;overflow-x:auto !important;-webkit-overflow-scrolling:touch;}
+  .is-mobile .tbl th,.is-mobile .tbl td{white-space:nowrap;}
+  /* Bảng Lô hàng (tab PAKD Mua) tách 3 bảng thead/tbody/tfoot → giữ display:table để thẳng cột, cuộn ngang chung khung */
+  .is-mobile .lohang-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  .is-mobile .lohang-wrap .tbl{display:table;min-width:700px;}
+  /* Bộ chọn SKU (ui.jsx SkuSel): xuống 2 dòng, ô đủ rộng cho chữ 16px */
+  .is-mobile .sku-sel{flex-wrap:wrap !important;row-gap:3px;}
+  .is-mobile .sku-sel>.inp{width:78px !important;}
+  .is-mobile .sku-sel>.inp:first-child{width:88px !important;}
+  /* Vạch ngăn dọc 1px giữa các nhóm nút — vô nghĩa khi đã xuống dòng */
+  .is-mobile .app-body span[style*="width: 1px"][style*="height: 18px"]{display:none;}
+
+  /* ── Grid nhiều cột → 2 cột ── */
+  .is-mobile .grid-kpi{grid-template-columns:repeat(2,1fr) !important;}
+  .is-mobile .grid-kpi>*{min-width:0;}
+  .is-mobile .grid-2col{grid-template-columns:1fr !important;}
+  .is-mobile [style*="repeat(3"],.is-mobile [style*="repeat(4"],.is-mobile [style*="repeat(5"],.is-mobile [style*="repeat(6"]{grid-template-columns:repeat(2,1fr) !important;}
+  .is-mobile .kpi-v{overflow-wrap:anywhere;}
+
+  /* ── Ô nhập & nút: đủ lớn để chạm; font 16px chống iOS tự zoom khi focus ── */
+  .is-mobile .inp{font-size:16px !important;min-height:38px;}
+  .is-mobile .btn{min-height:36px;}
+  .is-mobile .btn-xs{min-height:32px;}
+  .is-mobile .status-btn{min-height:32px;}
+  .is-mobile .toggle-btn{min-height:34px;}
+  .is-mobile .btn-danger{min-width:32px;min-height:32px;}
+
+  /* ── Biểu đồ Chart.js ── */
+  .is-mobile canvas,.is-mobile .chart-box{max-width:100%;}
+
+  /* ── Modal → sheet trượt từ đáy ── */
+  .is-mobile .modal-overlay{align-items:flex-end !important;padding:0 !important;}
+  .is-mobile .modal-box{width:100% !important;max-width:100% !important;max-height:92vh !important;max-height:92dvh !important;overflow-y:auto !important;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;margin-top:auto;border-radius:14px 14px 0 0 !important;padding:16px 14px calc(16px + env(safe-area-inset-bottom)) !important;}
+
+  /* ── Màn "Xác thực GitHub" vừa màn 375px ── */
+  .is-mobile .login-overlay{padding:16px !important;align-items:flex-start !important;overflow-y:auto;}
+  .is-mobile .login-box{max-width:100% !important;padding:22px 16px !important;margin:auto 0;}
+
+  /* ── Toast của Biểu đồ Kỹ thuật: nhấc lên trên thanh đáy ── */
+  .is-mobile .toast-stack{left:10px;right:10px !important;bottom:calc(66px + env(safe-area-inset-bottom)) !important;max-width:none !important;z-index:8100 !important;}
+}
+@media (max-width:768px) and (prefers-reduced-motion:reduce){
+  .is-mobile .m-sheet,.is-mobile .m-sheet-overlay{animation:none;}
+}

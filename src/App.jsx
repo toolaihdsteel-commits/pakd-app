@@ -10,9 +10,19 @@ import {MarketTab} from './components/MarketTab';
 import {EastMoneyChart} from './components/EastMoneyChart';
 import {datGasUrl} from './lib/eastmoney';
 import {ApprovalModal,ApproverAddForm,PinPromptModal,PinSetupForm} from './components/pin';
+import {useIsMobile} from './lib/mobile';
+import {MobileBottomNav,MobileHeader,MobileMoreSheet} from './components/MobileNav';
 // ─── APP ──────────────────────────────────────────────────────
 const App=()=>{
   const [tab,setTab]=useState('main');
+  // ── GIAO DIỆN ĐIỆN THOẠI (≤768px): header gọn + thanh đáy + bottom-sheet "Thêm" ──
+  const isMobile=useIsMobile();
+  const [moreOpen,setMoreOpen]=useState(false);
+  // Gắn cờ lên <html> để CSS mở khoá cuộn trang (html/body mặc định height:100vh;overflow:hidden)
+  useEffect(()=>{try{document.documentElement.classList.toggle('m-doc',isMobile);}catch(e){}},[isMobile]);
+  // Chuyển tab trên điện thoại: đóng sheet + cuộn về đầu trang
+  const goTabMobile=useCallback((k)=>{setTab(k);setMoreOpen(false);try{window.scrollTo(0,0);}catch(e){}},[]);
+  const closeMore=useCallback(()=>setMoreOpen(false),[]);
   const [inputs,setInputs]=useState(defInputs);
   const [products,setProducts]=useState(defProducts);
   const [inventory,setInvs]=useState(defInventory);
@@ -2032,7 +2042,7 @@ URL.revokeObjectURL(url);
   };
 
   return(
-    <div style={{height:'100vh',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+    <div className={isMobile?'app-root is-mobile':'app-root'} style={{height:'100vh',display:'flex',flexDirection:'column',overflow:'hidden'}}>
       <datalist id="alloy-list">{ALLOYS.map(a=><option key={a} value={a}/>)}</datalist>
       <datalist id="temper-list">{TEMPERS.map(a=><option key={a} value={a}/>)}</datalist>
       <datalist id="thick-list">{THICKS.map(a=><option key={a} value={a}/>)}</datalist>
@@ -2266,8 +2276,8 @@ URL.revokeObjectURL(url);
       )}
 
       {ghBlockedScreen&&!ghVerified&&(
-        <div style={{position:'fixed',inset:0,background:'linear-gradient(135deg,#0f172a 0%,#1e293b 100%)',zIndex:99999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',color:'#fff'}}>
-          <div style={{background:'#fff',color:'#0f172a',borderRadius:14,padding:'34px 38px',maxWidth:520,width:'100%',boxShadow:'0 30px 80px rgba(0,0,0,0.5)'}}>
+        <div className="login-overlay" style={{position:'fixed',inset:0,background:'linear-gradient(135deg,#0f172a 0%,#1e293b 100%)',zIndex:99999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',color:'#fff'}}>
+          <div className="login-box" style={{background:'#fff',color:'#0f172a',borderRadius:14,padding:'34px 38px',maxWidth:520,width:'100%',boxShadow:'0 30px 80px rgba(0,0,0,0.5)'}}>
             <div style={{textAlign:'center',marginBottom:20}}>
               <div style={{fontSize:'3rem',marginBottom:8}}>🔐</div>
               <h2 style={{fontWeight:900,fontSize:'1.3rem',color:'#0f172a',marginBottom:6}}>Xác thực GitHub bắt buộc</h2>
@@ -2304,7 +2314,10 @@ URL.revokeObjectURL(url);
         </div>
       )}
 
-      {/* ═══ HEADER ═══ */}
+      {/* ═══ HEADER ═══ — điện thoại dùng MobileHeader (components/MobileNav.jsx), desktop giữ nguyên bên dưới */}
+      {isMobile?(
+        <MobileHeader dbStatus={dbStatus} ghVerified={ghVerified} onSync={()=>syncGoogleSheet('all')} onMore={()=>setMoreOpen(true)} result={result} tab={tab}/>
+      ):(
       <div className="screen-container" style={{background:bg2,borderBottom:`1px solid ${border1}`,padding:'8px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
         <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
           <div style={{background:'linear-gradient(135deg,#0d9488,#2563eb)',borderRadius:'7px',width:'30px',height:'30px',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:'15px',color:'#fff',fontFamily:'JetBrains Mono'}}>P</div>
@@ -2351,15 +2364,16 @@ URL.revokeObjectURL(url);
           </button>
         </div>
       </div>
+      )}
 
       {/* ═══ BODY ═══ */}
-      <div className="screen-container" style={{flex:1,display:'flex',minHeight:0,overflow:'hidden'}}>
+      <div className="screen-container app-body" style={{flex:1,display:'flex',minHeight:0,overflow:'hidden'}}>
 
         {/* ════ TAB MAIN ════ */}
         {tab==='main'&&(
-          <div style={{display:'flex',width:'100%',height:'100%',minHeight:0}}>
+          <div className="tab-cols" style={{display:'flex',width:'100%',height:'100%',minHeight:0}}>
             {/* LEFT — Thông số + P&L summary */}
-            <div style={{width:'242px',flexShrink:0,background:bg2,borderRight:`1px solid ${border1}`,overflowY:'auto',padding:'10px',display:'flex',flexDirection:'column',gap:'8px'}}>
+            <div className="pane" style={{width:'242px',flexShrink:0,background:bg2,borderRight:`1px solid ${border1}`,overflowY:'auto',padding:'10px',display:'flex',flexDirection:'column',gap:'8px'}}>
               {/* Thông số nhập khẩu */}
               <div className="card">
                 <div className="sh"><Ic.Ship/>Thông số nhập khẩu</div>
@@ -2441,9 +2455,9 @@ URL.revokeObjectURL(url);
             </div>
 
             {/* CENTER — Lô hàng + SKU cards + Giá bán */}
-            <div style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',background:bg1}}>
+            <div className="pane" style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',background:bg1}}>
               {/* Toolbar */}
-              <div style={{padding:'7px 11px',borderBottom:`1px solid ${border1}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:bg2}}>
+              <div className="m-wrap" style={{padding:'7px 11px',borderBottom:`1px solid ${border1}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,background:bg2}}>
                 <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
                   <Ic.Ship/><span style={{fontWeight:800,fontSize:'.86rem',color:'#0f172a'}}>Lô hàng dự định mua</span>
                   <span className="tag tb">{products.length} SKU</span>
@@ -2495,7 +2509,7 @@ URL.revokeObjectURL(url);
               </div>
 
               {/* Lô hàng dự định mua — cố định ~350px, cuộn tbody khi >5 SKU */}
-              <div style={{flexShrink:0,background:bg2,borderBottom:`1px solid ${border1}`}}>
+              <div className="lohang-wrap" style={{flexShrink:0,background:bg2,borderBottom:`1px solid ${border1}`}}>
                 {/* thead cố định */}
                 <div style={{padding:'5px 11px 0'}}>
                   <table className="tbl" style={{tableLayout:'fixed',width:'100%'}}>
@@ -2520,7 +2534,7 @@ URL.revokeObjectURL(url);
                   </table>
                 </div>
                 {/* tbody — scroll vùng này, chiều cao cố định ~5 dòng */}
-                <div style={{height:205,overflowY:'auto',padding:'0 11px'}}>
+                <div className="scrollbox" style={{height:205,overflowY:'auto',padding:'0 11px'}}>
                   <table className="tbl" style={{tableLayout:'fixed',width:'100%'}}>
                     <colgroup>
                       <col style={{width:24}}/>
@@ -2589,7 +2603,7 @@ URL.revokeObjectURL(url);
               </div>
 
              {/* SKU Cards - Bây giờ chiếm toàn bộ chiều rộng cột giữa */}
-              <div style={{flex:1,overflowY:'auto',padding:'12px 14px'}}>
+              <div className="scrollbox" style={{flex:1,overflowY:'auto',padding:'12px 14px'}}>
                 {result?.blends?.length>0?(
                   <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(285px,1fr))',gap:'10px'}}>
                     {result.blends.map((b,i)=>{
@@ -2701,7 +2715,7 @@ URL.revokeObjectURL(url);
             </div>
 
             {/* CỘT PHẢI MỚI: GIÁ BÁN KH */}
-            <div style={{width:'280px',flexShrink:0,background:bg2,borderLeft:`1px solid ${border1}`,display:'flex',flexDirection:'column'}}>
+            <div className="pane" style={{width:'280px',flexShrink:0,background:bg2,borderLeft:`1px solid ${border1}`,display:'flex',flexDirection:'column'}}>
               
               {/* Header Cột Phải */}
               <div style={{padding:'10px 14px', borderBottom:`1px solid ${border1}`, background:'#f8fafc', zIndex:10}}>
@@ -2745,7 +2759,7 @@ URL.revokeObjectURL(url);
               </div>
 
               {/* Danh sách Card Giá bán (Rút gọn Input) */}
-              <div style={{flex:1, overflowY:'auto', padding:'12px 10px', display:'flex', flexDirection:'column', gap:'8px', background:bg1}}>
+              <div className="scrollbox" style={{flex:1, overflowY:'auto', padding:'12px 10px', display:'flex', flexDirection:'column', gap:'8px', background:bg1}}>
                 {filteredSP.length===0 && (
                   <div style={{textAlign:'center', padding:'20px 0', color:'#94a3b8', fontSize:'.75rem', fontWeight:600}}>
                     Chưa có SKU giá bán.<br/>Nhấn <b>Đ.bộ Lô</b> để tạo tự động.
@@ -2790,7 +2804,7 @@ URL.revokeObjectURL(url);
 
         {/* ════ TAB INVENTORY ════ */}
         {tab==='inventory'&&(
-          <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+          <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1200px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📦 Tồn kho chi tiết theo SKU + Coating</h2>
@@ -2813,7 +2827,7 @@ URL.revokeObjectURL(url);
                 const shortage=Math.max(poInView-allocated,0); // PO chưa giao mà kho không đủ để dành
                 const avail=totStock-allocated;
                 return(
-                  <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:11}}>
+                  <div className="grid-kpi" style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:11}}>
                     {[
                       {l:'Tổng tồn (lọc)',v:fv(totStock)+' kg',c:'#15803d'},
                       {l:'Đã trừ cho PO',v:'− '+fv(allocated)+' kg',c:'#7c3aed'},
@@ -2989,7 +3003,7 @@ URL.revokeObjectURL(url);
 
         {/* ════ TAB MIN/MAX STOCK ════ */}
         {tab==='minstock'&&(
-          <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+          <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1060px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
                 <div><h2 style={{fontWeight:900,fontSize:'1.05rem',color:'#0f172a'}}>📏 Min/Max Stock per SKU</h2><p style={{fontSize:'.78rem',color:'#475569',fontWeight:600,marginTop:3}}>Ô trống maxstockkg = không giới hạn (∞) · Đề xuất mua do TP Kinh doanh nhập trên GSheet</p></div>
@@ -3074,7 +3088,7 @@ URL.revokeObjectURL(url);
 
         {/* ════ TAB GIÁ SÀN v5.7 ════ */}
         {tab==='floor'&&(
-          <div style={{flex:1,padding:'14px 18px',overflowY:'auto',background:bg1}}>
+          <div className="scrollbox tab-page" style={{flex:1,padding:'14px 18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1600px',margin:'0 auto'}}>
 
               {/* HEADER + VIEWS */}
@@ -3597,7 +3611,7 @@ URL.revokeObjectURL(url);
         {tab==='techchart'&&<EastMoneyChart marketData={marketData} bg1={bg1} bg2={bg2} border2={border2}/>}
         {/* ════ TAB FLOOR HISTORY ════ */}
         {tab==='floorhistory'&&(
-          <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+          <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1200px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:15}}>
                 <div>
@@ -3752,7 +3766,7 @@ URL.revokeObjectURL(url);
 
         {/* ════ TAB PO ĐÃ KÝ ════ */}
         {tab==='po'&&(
-          <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+          <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
             <div style={{maxWidth:'1200px',margin:'0 auto'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,flexWrap:'wrap',gap:8}}>
                 <div>
@@ -3781,7 +3795,7 @@ URL.revokeObjectURL(url);
                 const groups={};list.forEach(p=>{(groups[p.po]=groups[p.po]||[]).push(p);});
                 return(
                   <>
-                    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
+                    <div className="grid-kpi" style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:12}}>
                       {[
                         {l:'Số PO',v:[...new Set(list.map(p=>p.po))].length,c:'#1d4ed8'},
                         {l:'Dòng SKU',v:list.length,c:'#0369a1'},
@@ -4079,8 +4093,8 @@ URL.revokeObjectURL(url);
       {/* MODAL: GITHUB CONFIG */}
       {/* R9: MODAL THÊM PO / THÊM HÀNG VÀO PO SẴN — nhiều dòng hàng, 1 lần PIN */}
       {poForm.open&&(
-        <div onClick={()=>setPoForm(p=>({...p,open:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'20px 24px',maxWidth:680,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setPoForm(p=>({...p,open:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'20px 24px',maxWidth:680,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,borderBottom:'2px solid #e2e8f0',paddingBottom:8}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>{poForm.lockHeader?`➕ Thêm hàng vào PO ${poForm.po}`:'➕ Thêm PO mới'} <span style={{fontSize:'.62rem',fontWeight:700,color:'#64748b'}}>(ghi thẳng GSheet · 1 lần PIN cho cả PO · lưu vết)</span></h3>
               <button onClick={()=>setPoForm(p=>({...p,open:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
@@ -4118,8 +4132,8 @@ URL.revokeObjectURL(url);
         </div>
       )}
       {ghStatus.configOpen&&(
-        <div onClick={()=>setGhStatus(p=>({...p,configOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:560,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setGhStatus(p=>({...p,configOpen:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:560,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>⚙️ Cấu hình GitHub</h3>
               <button onClick={()=>setGhStatus(p=>({...p,configOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
@@ -4194,8 +4208,8 @@ URL.revokeObjectURL(url);
 
       {/* MODAL: QUẢN LÝ NGƯỜI DUYỆT (Việc 1) */}
       {apvStatus.manageOpen&&(
-        <div onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>👥 Quản lý người duyệt</h3>
               <button onClick={()=>setApvStatus(p=>({...p,manageOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
@@ -4247,8 +4261,8 @@ URL.revokeObjectURL(url);
 
       {/* MODAL: THIẾT LẬP PIN LẦN ĐẦU */}
       {pinStatus.setupOpen&&(
-        <div onClick={()=>setPinStatus(p=>({...p,setupOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.75)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:480,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setPinStatus(p=>({...p,setupOpen:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.75)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:480,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🔐 Thiết lập PIN duyệt</h3>
               <button onClick={()=>setPinStatus(p=>({...p,setupOpen:false}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
@@ -4267,8 +4281,8 @@ URL.revokeObjectURL(url);
       )}
       {/* MODAL: DANH SÁCH PA TỪ GITHUB */}
       {ghStatus.loadOpen&&(
-        <div onClick={()=>setGhStatus(p=>({...p,loadOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:720,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setGhStatus(p=>({...p,loadOpen:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:720,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🔄 Luồng duyệt Mua ({ghStatus.plansList.length})</h3>
@@ -4376,8 +4390,8 @@ URL.revokeObjectURL(url);
 
       {/* MODAL: NHÁP LOCAL (thay tab Scenarios) */}
       {draftModalOpen&&(
-        <div onClick={()=>setDraftModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setDraftModalOpen(false)} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:640,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📁 Bản nháp PA trên máy ({localDrafts.length})</h3>
@@ -4408,8 +4422,8 @@ URL.revokeObjectURL(url);
 
       {/* SỬA #4: MODAL Nháp Giá sàn trên máy */}
       {floorDraftModalOpen&&(
-        <div onClick={()=>setFloorDraftModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:680,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setFloorDraftModalOpen(false)} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:680,width:'100%',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🗂 Bản nháp Giá sàn trên máy ({floorDrafts.length})</h3>
@@ -4454,8 +4468,8 @@ URL.revokeObjectURL(url);
 
       {/* MODAL: SÀN PENDING / APPROVED */}
       {floorStatus.viewOpen&&(
-        <div onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setFloorStatus(p=>({...p,viewOpen:false}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:880,width:'100%',maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
                 <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>🔄 Luồng duyệt Sàn</h3>
@@ -4589,8 +4603,8 @@ URL.revokeObjectURL(url);
       )}
       {/* MODAL: LỊCH SỬ SÀN ĐÃ DUYỆT (có expand chi tiết) */}
       {floorStatus.historyOpen&&(
-        <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:1100,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+        <div onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+          <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:1100,width:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
               <h3 style={{fontWeight:900,fontSize:'1rem',color:'#0f172a'}}>📚 Lịch sử Sàn đã duyệt ({floorStatus.history.length}) — Click để xem chi tiết</h3>
               <button onClick={()=>setFloorStatus(p=>({...p,historyOpen:false,expandedIdx:null}))} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>
@@ -4663,6 +4677,10 @@ URL.revokeObjectURL(url);
           </div>
         </div>
       )}
+
+      {/* ═══ ĐIỆN THOẠI: thanh điều hướng đáy + bottom-sheet "Thêm" (chỉ khi ≤768px) ═══ */}
+      {isMobile&&<MobileBottomNav tab={tab} onGo={goTabMobile} onMore={()=>setMoreOpen(true)}/>}
+      {isMobile&&<MobileMoreSheet open={moreOpen} onClose={closeMore} tab={tab} onGo={goTabMobile} poCount={poData.length} onSave={saveScenario} canSave={!!result} onPrint={()=>window.print()} canPrint={!!result} onGithub={()=>setGhStatus(p=>({...p,configOpen:true}))} ghVerified={ghVerified} ghLogin={ghUser?.login} onCeo={()=>{location.hash='#ceo';}}/>}
     </div>
   );
 };

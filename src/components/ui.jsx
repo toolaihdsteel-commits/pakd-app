@@ -64,7 +64,7 @@ const FilterBar=({filter,setFilter,alloys,showStatus=false,showCoating=true,show
 const SkuSel=({row,onChange,showCoating=true})=>{
   const S=(f,v)=>onChange({...row,[f]:v});
   return(
-    <div style={{display:'flex',gap:'3px',alignItems:'center',flexWrap:'nowrap'}}>
+    <div className="sku-sel" style={{display:'flex',gap:'3px',alignItems:'center',flexWrap:'nowrap'}}>
       <input list="alloy-list" className="inp inp-xs font-bold" style={{width:76}} value={row.alloy} onChange={e=>S('alloy',e.target.value)} placeholder="Mác"/>
       <input list="temper-list" className="inp inp-xs font-semibold" style={{width:58,color:'#2563eb'}} value={row.temper} onChange={e=>S('temper',e.target.value)} placeholder="Cứng"/>
       <span style={{color:'#334155',fontSize:'.8rem',fontWeight:'bold',flexShrink:0}}>•</span>

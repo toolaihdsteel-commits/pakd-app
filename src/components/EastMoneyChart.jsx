@@ -338,7 +338,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
     border:`1px solid ${on?'#0891b2':border2}`,background:on?'#0891b2':'#fff',color:on?'#fff':'#475569'});
 
   return (
-    <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+    <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
       <div style={{maxWidth:'1300px',margin:'0 auto'}}>
 
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',
@@ -532,7 +532,7 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
 
       {/* Toast góc phải dưới — báo nhẹ, tự tắt, không đẩy layout */}
       {toasts.length>0&&(
-        <div style={{position:'fixed',right:16,bottom:16,zIndex:60,display:'flex',
+        <div className="toast-stack" style={{position:'fixed',right:16,bottom:16,zIndex:60,display:'flex',
                      flexDirection:'column',gap:8,maxWidth:'min(380px,90vw)'}}>
           {toasts.map(t=>{
             const m=t.kieu==='loi'?{vien:'#fca5a5',nen:'#fef2f2',chu:'#991b1b',bieu:'✕'}

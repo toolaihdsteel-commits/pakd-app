@@ -96,8 +96,8 @@ function PinPromptModal({message,onSubmit,onCancel}){
   const [pin,setPin]=useState('');
   const submit=()=>{onSubmit(pin);};
   return(
-    <div onClick={onCancel} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.72)',zIndex:10001,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:420,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.35)'}}>
+    <div onClick={onCancel} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.72)',zIndex:10001,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:420,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.35)'}}>
         <div style={{fontSize:'.86rem',fontWeight:800,color:'#0f172a',marginBottom:12,lineHeight:1.5}}>{message}</div>
         <input autoFocus type="password" inputMode="numeric" className="inp" placeholder="Nhập PIN ●●●●" value={pin}
           onChange={e=>setPin(e.target.value.replace(/\D/g,'').substring(0,8))}
@@ -118,8 +118,8 @@ function ApprovalModal({file,approver,loading,onClose,onSubmit}){
   const [pin,setPin]=useState('');
   const pinOk=/^\d{4,8}$/.test(pin);
   return(
-    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(15,23,42,.7)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:460,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+    <div onClick={onClose} className="modal-overlay" style={{position:'fixed',inset:0,background:'rgba(15,23,42,.7)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} className="modal-box" style={{background:'#fff',borderRadius:10,padding:'22px 26px',maxWidth:460,width:'100%',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,borderBottom:'2px solid #e2e8f0',paddingBottom:10}}>
           <h3 style={{fontWeight:900,fontSize:'.96rem',color:'#0f172a'}}>✍ Cho ý kiến PAKD Mua</h3>
           <button onClick={onClose} style={{background:'none',border:'none',fontSize:'1.4rem',cursor:'pointer',color:'#64748b'}}>×</button>

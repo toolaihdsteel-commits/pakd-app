@@ -122,7 +122,7 @@ export const MarketTab=({
     }catch(err){console.error('Lỗi vẽ biểu đồ thị trường:',err);}
   },[marketRows,allRawImportPrices,marketAlloy,smmFactor,smmExVat]);
   return (
-    <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+    <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
       <div style={{maxWidth:'1300px',margin:'0 auto'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12,flexWrap:'wrap',gap:8}}>
           <div>
@@ -256,7 +256,7 @@ export const MarketTab=({
 
   {/* ════ TAB SCENARIOS — ĐÃ BỎ (thay bằng nút 💾 Lưu Local / 📁 Nháp Local) ════ */}
   {false&&(
-    <div style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
+    <div className="scrollbox tab-page" style={{flex:1,padding:'18px',overflowY:'auto',background:bg1}}>
       <div style={{maxWidth:'1060px',margin:'0 auto'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:15}}>
           <div>
