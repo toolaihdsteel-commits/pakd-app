@@ -968,6 +968,51 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Không đọc được file Sàn:\n${e.message}`);return;
     }
+    // ĐỦ CẤP → chuyển file sang /floor/approved/ + chèn /floor/history.json + ghi GSheet (dùng chung cho ký bước cuối & ban hành bù)
+    const chuyenSangDaDuyet=async(payload,approvalsArr,nguoi)=>{
+        const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
+      await ghAPI('PUT',`contents/floor/approved/${file.name}`,{
+        message:`✓ Duyệt đủ cấp Sàn ${file.name} (${payload.approvedBy})`,
+        content:newContentB64,branch:ghConfig.branch||'main',
+      });
+      if(folder==='pending'){
+        await ghAPI('DELETE',`contents/floor/pending/${file.name}`,{
+          message:`Xóa pending sau khi duyệt đủ cấp: ${file.name}`,
+          sha:data.sha,branch:ghConfig.branch||'main',
+        });
+      }
+      // Append vào /floor/history.json
+      let historyArr=[];let historySha=null;
+      try{
+        const hd=await ghAPI('GET','contents/floor/history.json');
+        historySha=hd.sha;
+        const hc=decodeURIComponent(escape(atob(hd.content.replace(/\n/g,''))));
+        const hobj=JSON.parse(hc);
+        historyArr=Array.isArray(hobj)?hobj:(hobj.entries||[]);
+      }catch(e){/* chưa có history */}
+      historyArr.push({
+        weekLabel:payload.weekLabel,
+        approvedAt:payload.approvedAt,
+        approvedBy:payload.approvedBy,
+        requestedBy:payload.requestedBy,
+        requestNote:payload.requestNote,
+        groupsCount:payload.groupsCount,
+        groups:payload.groups,
+        exchangeRate:payload.exchangeRate,
+        approvals:approvalsArr,
+        sourceFile:file.name,
+      });
+      // SỬA R13: sắp theo ngày duyệt giảm dần (ban hành bù Sàn cũ không chen lên đầu)
+      historyArr.sort((a,b)=>String(b.approvedAt||'').localeCompare(String(a.approvedAt||'')));
+      const histB64=btoa(unescape(encodeURIComponent(JSON.stringify(historyArr,null,2))));
+      const histBody={message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
+      if(historySha) histBody.sha=historySha;
+      await ghAPI('PUT','contents/floor/history.json',histBody);
+      const soBan=historyArr.length;
+      // R6: ghi thêm vào GSheet lich_su_gia_san (nền)
+      pushFloorHistoryToSheet({weekLabel:payload.weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,exchangeRate:payload.exchangeRate,sourceFile:file.name,groups:payload.groups},nguoi);
+      return soBan;
+    };
     const approvalsArr=Array.isArray(payload.approvals)?payload.approvals:[];
     const prog=approvalProgress(apList,approvalsArr,'floor');
     if(prog.empty){
@@ -979,9 +1024,47 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false}));
       alert('⚠ Sàn này đã bị từ chối ở bước trước.');return;
     }
+    // SỬA R13 (09/10): ĐỦ CẤP NHƯNG CÒN NẰM Ở pending/ → BAN HÀNH BÙ.
+    // Việc chuyển sang approved/ chỉ chạy đúng lúc có người ký. Nếu sau đó danh sách người duyệt
+    // bị đổi bước (09/10: Mr Dương B3 → B2, ngang MS Liên) thì chữ ký B2 cũ của MS Liên trở thành
+    // "bước cao nhất" → app tính ra đủ cấp nhưng file vẫn kẹt ở Chờ duyệt, bấm Duyệt chỉ báo
+    // "đã đủ cấp rồi" rồi thoát. Nay: hỏi xác nhận + PIN người trong luồng Sàn (để lưu vết) rồi
+    // chuyển sang Đã duyệt. Ngày duyệt = giờ CHỮ KÝ CUỐI (không phải hôm nay) để Sàn cũ không
+    // nhảy lên làm "Sàn trước" mới nhất.
     if(prog.done){
-      setFloorStatus(p=>({...p,loading:false}));
-      alert('✓ Sàn này đã được duyệt đủ cấp (bước cao nhất đã ký) rồi.');return;
+      if(folder!=='pending'){
+        setFloorStatus(p=>({...p,loading:false}));
+        alert('✓ Sàn này đã được duyệt đủ cấp (bước cao nhất đã ký) rồi.');return;
+      }
+      const daKy=approvalsArr.filter(a=>a.decision==='approved');
+      const kyCuoi=daKy.reduce((m,a)=>(a.at&&a.at>m?a.at:m),'');
+      if(!window.confirm(`Sàn ${payload.weekLabel||file.name} ĐÃ ĐỦ CẤP (bước cao nhất ${prog.maxStep} đã ký) nhưng chưa được chuyển sang "Đã duyệt".
+
+Đã ký: ${daKy.map(a=>a.name+' (B'+a.step+')').join(', ')}
+
+Ban hành ngay? (ngày duyệt ghi theo chữ ký cuối: ${kyCuoi?new Date(kyCuoi).toLocaleString('vi-VN'):'?'})`)){
+        setFloorStatus(p=>({...p,loading:false}));return;
+      }
+      const pin0=await askPin('🔐 Nhập PIN của bạn để BAN HÀNH Sàn đã đủ cấp (lưu vết người bấm):');
+      if(pin0===null){setFloorStatus(p=>({...p,loading:false}));return;}
+      const ng=await findByPin(apList,pin0);
+      if(!ng||stepOf(ng,'floor')<=0){setFloorStatus(p=>({...p,loading:false}));alert('❌ PIN không khớp người nào trong luồng duyệt SÀN.');return;}
+      try{
+        payload.status='approved';
+        payload.approvedBy=daKy.map(a=>a.name).join(' → ');
+        payload.approvedAt=kyCuoi||new Date().toISOString();
+        payload.finalizedBy=ng.name;payload.finalizedAt=new Date().toISOString();
+        payload.finalizeNote='Ban hành bù: đủ cấp sau khi đổi bước người duyệt';
+        await chuyenSangDaDuyet(payload,approvalsArr,ng.name);
+        alert(`✓ Đã BAN HÀNH Sàn ${payload.weekLabel}.
+→ Chuyển sang "Đã duyệt" + ghi lịch sử (ngày duyệt ${new Date(payload.approvedAt).toLocaleString('vi-VN')}).`);
+        await listFloorSubmissions();
+      }catch(e){
+        setFloorStatus(p=>({...p,loading:false,error:e.message}));
+        alert(`❌ Lỗi khi ban hành:
+${e.message}`);
+      }
+      return;
     }
     // 2. SỬA #3c (R3): TỰ NHẬN DIỆN người ký BẰNG PIN (không buộc đúng "next"). Bước cao hơn được duyệt vượt.
     const pin=await askPin(`🔐 Nhập PIN của bạn để ${verbTxt.toUpperCase()} Sàn (hệ thống tự nhận diện bạn là ai & bước):`);
@@ -1015,50 +1098,13 @@ const App=()=>{
       payload.approvals=approvalsArr;
       const prog2=approvalProgress(apList,approvalsArr,'floor');
       payload.status=prog2.rejected?'rejected':prog2.done?'approved':'pending';
-      payload.approvedBy=prog2.done?(prog2.chain||[]).map(a=>a.name).join(' → '):null;
+      payload.approvedBy=prog2.done?approvalsArr.filter(a=>a.decision==='approved').map(a=>a.name).join(' → '):null;
       payload.approvedAt=prog2.done?new Date().toISOString():null;
 
       if(prog2.done){
         // ĐỦ CẤP → chuyển sang /floor/approved/ + append history
-        const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
-        await ghAPI('PUT',`contents/floor/approved/${file.name}`,{
-          message:`✓ Duyệt đủ cấp Sàn ${file.name} (${payload.approvedBy})`,
-          content:newContentB64,branch:ghConfig.branch||'main',
-        });
-        if(folder==='pending'){
-          await ghAPI('DELETE',`contents/floor/pending/${file.name}`,{
-            message:`Xóa pending sau khi duyệt đủ cấp: ${file.name}`,
-            sha:data.sha,branch:ghConfig.branch||'main',
-          });
-        }
-        // Append vào /floor/history.json
-        let historyArr=[];let historySha=null;
-        try{
-          const hd=await ghAPI('GET','contents/floor/history.json');
-          historySha=hd.sha;
-          const hc=decodeURIComponent(escape(atob(hd.content.replace(/\n/g,''))));
-          const hobj=JSON.parse(hc);
-          historyArr=Array.isArray(hobj)?hobj:(hobj.entries||[]);
-        }catch(e){/* chưa có history */}
-        historyArr.unshift({
-          weekLabel:payload.weekLabel,
-          approvedAt:payload.approvedAt,
-          approvedBy:payload.approvedBy,
-          requestedBy:payload.requestedBy,
-          requestNote:payload.requestNote,
-          groupsCount:payload.groupsCount,
-          groups:payload.groups,
-          exchangeRate:payload.exchangeRate,
-          approvals:approvalsArr,
-          sourceFile:file.name,
-        });
-        const histB64=btoa(unescape(encodeURIComponent(JSON.stringify(historyArr,null,2))));
-        const histBody={message:`📚 Append vào history.json: Sàn ${payload.weekLabel}`,content:histB64,branch:ghConfig.branch||'main'};
-        if(historySha) histBody.sha=historySha;
-        await ghAPI('PUT','contents/floor/history.json',histBody);
-        // R6: ghi thêm vào GSheet lich_su_gia_san (nền)
-        pushFloorHistoryToSheet({weekLabel:payload.weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,exchangeRate:payload.exchangeRate,sourceFile:file.name,groups:payload.groups},signer.name);
-        alert(`✓ ${signer.name} đã ký bước cuối.\n🎉 Sàn ${payload.weekLabel} ĐÃ DUYỆT ĐỦ CẤP.\n→ Chuyển /floor/approved/ + append history (${historyArr.length} bản).`);
+        const soBan=await chuyenSangDaDuyet(payload,approvalsArr,signer.name);
+        alert(`✓ ${signer.name} đã ký bước cuối.\n🎉 Sàn ${payload.weekLabel} ĐÃ DUYỆT ĐỦ CẤP.\n→ Chuyển /floor/approved/ + append history (${soBan} bản).`);
       }else{
         // Chưa đủ cấp (hoặc bị bác) → ghi lại tại chỗ
         const newContentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
@@ -1078,7 +1124,7 @@ const App=()=>{
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi ${verbTxt}:\n${e.message}`);
     }
-  },[ghAPI,ghConfig.branch,listFloorSubmissions,approvers,loadApprovers,sha256,askPin]);
+  },[ghAPI,ghConfig.branch,listFloorSubmissions,approvers,loadApprovers,sha256,askPin,pushFloorHistoryToSheet]);
 
   // Xem chi tiết 1 file Sàn
   const viewFloorSubmission=useCallback(async(file,folder)=>{
@@ -4492,6 +4538,8 @@ URL.revokeObjectURL(url);
                 return list.map((f,i)=>{
                   const d=f._data||{};
                   const isPending=floorStatus.activeTab==='pending'&&d.status!=='rejected';
+                  // SỬA R13: đủ cấp nhưng file còn ở pending/ (đổi bước người duyệt sau khi ký) → cần BAN HÀNH BÙ
+                  const canBanHanh=isPending&&approvers.length>0&&approvalProgress(approvers,d.approvals||[],'floor').done;
                   const isRejected=d.status==='rejected';
                   const isApproved=floorStatus.activeTab==='approved';
                   const badge=isApproved?{bg:'#dcfce7',br:'#86efac',c:'#14532d',t:'✓ ĐÃ DUYỆT'}:isRejected?{bg:'#fee2e2',br:'#fca5a5',c:'#991b1b',t:'✗ TỪ CHỐI'}:{bg:'#fef3c7',br:'#fcd34d',c:'#854d0e',t:'⏳ CHỜ DUYỆT'};
@@ -4519,7 +4567,9 @@ URL.revokeObjectURL(url);
                               <div style={{marginTop:5}}>
                                 <div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>
                                   {prog.chain.map(ap=>{
-                                    const act=acts.find(a=>a.id===ap.id);
+                                    // SỬA R13: chữ ký bằng mã người duyệt CŨ (vd mslien_hqbz trước khi tạo lại người duyệt) → khớp theo tên
+                                    const tenChuan=x=>String(x||'').toLowerCase().replace(/\s+/g,'');
+                                    const act=acts.find(a=>a.id===ap.id)||acts.find(a=>!prog.chain.some(c=>c.id===a.id)&&tenChuan(a.name)===tenChuan(ap.name));
                                     const passed=prog.topSigned>0&&stepOf(ap,'floor')<prog.topSigned&&!act; // bị bỏ qua
                                     const isNext=prog.nextApprover&&prog.nextApprover.id===ap.id&&!prog.rejected&&!prog.done;
                                     const bg=act?(act.decision==='approved'?'#dcfce7':'#fee2e2'):isNext?'#fef9c3':passed?'#f8fafc':'#f1f5f9';
@@ -4529,7 +4579,7 @@ URL.revokeObjectURL(url);
                                   })}
                                 </div>
                                 <div style={{fontSize:'.6rem',marginTop:3,fontWeight:700,color:prog.done?'#14532d':prog.rejected?'#991b1b':'#92400e'}}>
-                                  {prog.done?'✓ Đã duyệt đủ cấp (bước cao nhất đã ký)':prog.rejected?'✗ Đã bị bác':prog.nextApprover?`⏳ Chờ duyệt: ${prog.nextApprover.name} (${prog.nextApprover.role} · bước ${stepOf(prog.nextApprover,'floor')})`:'⏳ Chờ duyệt'}
+                                  {prog.done?(isPending?'✓ Đủ cấp — bấm 🏁 Ban hành để chuyển sang "Đã duyệt"':'✓ Đã duyệt đủ cấp (bước cao nhất đã ký)'):prog.rejected?'✗ Đã bị bác':prog.nextApprover?`⏳ Chờ duyệt: ${prog.nextApprover.name} (${prog.nextApprover.role} · bước ${stepOf(prog.nextApprover,'floor')})`:'⏳ Chờ duyệt'}
                                 </div>
                               </div>
                             );
@@ -4541,8 +4591,8 @@ URL.revokeObjectURL(url);
                           <button onClick={()=>setFloorStatus(p=>({...p,expandFloorKey:open?null:key}))} style={{fontSize:'.65rem',background:open?'#e0e7ff':'#eef2ff',color:'#3730a3',border:'1px solid #c7d2fe',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>{open?'▲ Ẩn':'👁 Xem'}</button>
                           );})()}
                           <button onClick={()=>loadFloorSubmissionToApp(d,f.name)} title="Tải Sàn này vào màn hình (tỷ giá, Sàn ban hành, cờ trừ PO)" style={{fontSize:'.65rem',background:'#dcfce7',color:'#14532d',border:'1px solid #86efac',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>⬇ Tải về app</button>
-                          {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}}>✓ Duyệt</button>}
-                          {isPending&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
+                          {isPending&&<button className="btn btn-success btn-xs" onClick={()=>reviewFloorSubmission(f,'pending','approved')} disabled={floorStatus.loading} style={{fontSize:'.65rem'}} title={canBanHanh?'Đã đủ cấp — bấm để chuyển sang Đã duyệt (cần PIN)':''}>{canBanHanh?'🏁 Ban hành':'✓ Duyệt'}</button>}
+                          {isPending&&!canBanHanh&&<button onClick={()=>reviewFloorSubmission(f,'pending','rejected')} disabled={floorStatus.loading} style={{fontSize:'.65rem',background:'#fee2e2',color:'#991b1b',border:'1px solid #fca5a5',padding:'3px 8px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>✗ Bác</button>}
                           {/* SỬA #1 (R4): Xóa PA Sàn — cần PIN quản trị/Giám đốc */}
                           <button onClick={()=>deleteFloorSubmission(f,floorStatus.activeTab)} disabled={floorStatus.loading} title="Xóa phương án Sàn này (cần PIN Quản trị/Giám đốc)" style={{fontSize:'.6rem',background:'#fef2f2',color:'#b91c1c',border:'1px solid #fca5a5',padding:'2px 7px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>🗑 Xóa</button>
                         </div>
