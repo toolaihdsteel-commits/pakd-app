@@ -200,12 +200,19 @@ const findByPin=async(list,pin)=>{
 //  • Người bước cao nhất ký → XONG ngay (bỏ qua mọi bước còn lại).
 //  • Người bước thấp ký → chuyển lên bước CAO HƠN gần nhất chưa ký, cho tới bước cao nhất.
 //  • Người trình/ký ở bước N → bỏ qua các bước < N; người kế tiếp là bước nhỏ nhất > (bước cao nhất đã ký).
+// "Mr Dương hoặc MS Liên (B2)" — dùng cho thông báo / tooltip khi nhiều người cùng bậc
+const tenNguoiCho=(prog,flow='buy',kemVaiTro=false)=>{
+  const ds=(prog&&prog.nextApprovers&&prog.nextApprovers.length)?prog.nextApprovers:(prog&&prog.nextApprover?[prog.nextApprover]:[]);
+  if(!ds.length) return '?';
+  const ten=ds.map(a=>kemVaiTro&&a.role?`${a.name} (${a.role})`:a.name).join(' hoặc ');
+  return `${ten} · bước ${stepOf(ds[0],flow)}${ds.length>1?' — 1 trong '+ds.length+' người ký là qua bậc':''}`;
+};
 const approvalProgress=(approvers,approvals,flow='buy')=>{
   const apvs=(approvers||[]).filter(a=>stepOf(a,flow)>0).slice().sort((a,b)=>stepOf(a,flow)-stepOf(b,flow));
   const acts=approvals||[];
   const rejected=acts.some(a=>a.decision==='rejected');
-  if(rejected) return {done:false,rejected:true,nextApprover:null,chain:apvs,maxStep:null,topSigned:null};
-  if(apvs.length===0) return {done:false,rejected:false,nextApprover:null,chain:apvs,empty:true,maxStep:null,topSigned:null};
+  if(rejected) return {done:false,rejected:true,nextApprover:null,nextApprovers:[],chain:apvs,maxStep:null,topSigned:null};
+  if(apvs.length===0) return {done:false,rejected:false,nextApprover:null,nextApprovers:[],chain:apvs,empty:true,maxStep:null,topSigned:null};
   const maxStep=Math.max(...apvs.map(a=>stepOf(a,flow)));         // bước cao nhất của luồng
   // Bước cao nhất ĐÃ KÝ duyệt
   const signedSteps=acts.filter(a=>a.decision==='approved').map(a=>{
@@ -214,10 +221,14 @@ const approvalProgress=(approvers,approvals,flow='buy')=>{
   }).filter(s=>s>0);
   const topSigned=signedSteps.length?Math.max(...signedSteps):0;
   // XONG khi bước cao nhất của luồng đã ký
-  if(topSigned>=maxStep) return {done:true,rejected:false,nextApprover:null,chain:apvs,maxStep,topSigned,empty:false};
+  if(topSigned>=maxStep) return {done:true,rejected:false,nextApprover:null,nextApprovers:[],chain:apvs,maxStep,topSigned,empty:false};
   // Chưa xong → người kế tiếp = bước NHỎ NHẤT > topSigned (bỏ qua mọi bước <= topSigned)
   const next=apvs.find(ap=>stepOf(ap,flow)>topSigned&&!acts.some(a=>a.id===ap.id&&a.decision==='approved'));
-  return {done:false,rejected:false,nextApprover:next||null,chain:apvs,maxStep,topSigned,empty:false};
+  // SỬA R14 (28/10): NHIỀU NGƯỜI CÙNG BẬC (vd Mr Dương & MS Liên cùng B2 luồng Sàn) → TẤT CẢ đều là
+  // "người kế tiếp", 1 trong số họ ký là qua bậc. Trước đây chỉ trả 1 người (ai đứng trước trong danh
+  // sách) nên chỉ đèn Mr Dương sáng, dễ hiểu lầm là phải chờ đúng Mr Dương.
+  const nextApprovers=next?apvs.filter(ap=>stepOf(ap,flow)===stepOf(next,flow)&&!acts.some(a=>a.id===ap.id&&a.decision==='approved')):[];
+  return {done:false,rejected:false,nextApprover:next||null,nextApprovers,chain:apvs,maxStep,topSigned,empty:false};
 };
 
 const weightedAvg=rows=>{
@@ -587,4 +598,4 @@ const defInputs={
   finCostPct: 1.5, // Được dùng như Chi phí Công Nợ (CN) trong mode fixed
 };
 
-export {ALLOYS,PIN_SALT,hashPin,pinMatches,findByPin,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_MONTHLY_REVENUE,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,calcAlloySummary,calcFinance,calcFloorForSku,calcFloorPricePerSku,calcInventoryValue,calcInvoice,calcLanded,calcLimitsWarnings,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,coatingShort,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findSellPrice,findUpdatedImportPrice,fpct,fu,fv,groupBySku,normDim,normThick,parseCsv,parsePOData,parseVNDate,pn,poGet,poNum,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg};
+export {tenNguoiCho,ALLOYS,PIN_SALT,hashPin,pinMatches,findByPin,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_MONTHLY_REVENUE,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,calcAlloySummary,calcFinance,calcFloorForSku,calcFloorPricePerSku,calcInventoryValue,calcInvoice,calcLanded,calcLimitsWarnings,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,coatingShort,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findSellPrice,findUpdatedImportPrice,fpct,fu,fv,groupBySku,normDim,normThick,parseCsv,parsePOData,parseVNDate,pn,poGet,poNum,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg};

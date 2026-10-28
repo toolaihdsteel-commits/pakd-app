@@ -2,7 +2,7 @@ import React from 'react';
 const {useState,useEffect,useRef,useMemo,useCallback,Component}=React;
 import Chart from 'chart.js/auto';
 import {bienTheKhoa,khoaSku,nhanSku} from './lib/chuanhoa';
-import {ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
+import {tenNguoiCho,ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
 import {getCurrentWeekLabel,matchWeekLabel,parseCashFlowCSV} from './lib/cashflow';
 import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
 import {CashFlowTab} from './components/CashFlowTab';
@@ -472,7 +472,7 @@ const App=()=>{
       const contentB64=btoa(unescape(encodeURIComponent(JSON.stringify(payload,null,2))));
       await ghAPI('PUT',`contents/plans/${fname}`,{message:`Trình duyệt PA ${fname} — ${me.name} ký bước ${stepOf(me,'buy')}`,content:contentB64,branch:ghConfig.branch||'main'});
       setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã trình duyệt ${fname}`}));
-      alert(`✓ ĐÃ TRÌNH DUYỆT!\nFile: ${fname}\nBạn: ${me.name} (đã ký bước ${stepOf(me,'buy')}).\n${prog2.done?'🎉 Đủ cấp luôn (bạn là bước cao nhất).':'⏳ Chuyển bước kế: '+(prog2.nextApprover?prog2.nextApprover.name+' ('+prog2.nextApprover.role+')':'?')+'.'}`);
+      alert(`✓ ĐÃ TRÌNH DUYỆT!\nFile: ${fname}\nBạn: ${me.name} (đã ký bước ${stepOf(me,'buy')}).\n${prog2.done?'🎉 Đủ cấp luôn (bạn là bước cao nhất).':'⏳ Chuyển bước kế: '+tenNguoiCho(prog2,'buy',true)+'.'}`);
     }catch(e){
       setGhStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi trình duyệt:\n${e.message}`);
@@ -857,7 +857,7 @@ const App=()=>{
         pushFloorHistoryToSheet({weekLabel,approvedAt:payload.approvedAt,approvedBy:payload.approvedBy,requestedBy:payload.requestedBy,requestNote:payload.requestNote,exchangeRate:payload.exchangeRate,sourceFile:fname,groups:payload.groups},me.name);
       }
       setFloorStatus(p=>({...p,loading:false,lastAction:`✓ Đã gửi Sàn ${weekLabel}`}));
-      alert(`✓ Đã gửi Sàn ${weekLabel}!\nBạn: ${me.name} (đã ký bước ${stepOf(me,'floor')}).\n${prog1.done?'🎉 Đủ cấp — đã ban hành luôn.':'⏳ Chuyển bước kế tiếp: '+(prog1.nextApprover?prog1.nextApprover.name+' ('+prog1.nextApprover.role+')':'?')+'.'}`);
+      alert(`✓ Đã gửi Sàn ${weekLabel}!\nBạn: ${me.name} (đã ký bước ${stepOf(me,'floor')}).\n${prog1.done?'🎉 Đủ cấp — đã ban hành luôn.':'⏳ Chuyển bước kế tiếp: '+tenNguoiCho(prog1,'floor',true)+'.'}`);
     }catch(e){
       setFloorStatus(p=>({...p,loading:false,error:e.message}));
       alert(`❌ Lỗi khi gửi Sàn:\n${e.message}`);
@@ -1115,7 +1115,7 @@ ${e.message}`);
         if(prog2.rejected){
           alert(`✗ ${signer.name} đã BÁC Sàn ${payload.weekLabel}.`);
         }else{
-          alert(`✓ ${signer.name} (${signer.role}) đã ký duyệt bước ${stepOf(signer,'floor')}.\n⏳ Chuyển bước kế tiếp: ${prog2.nextApprover?prog2.nextApprover.name+' ('+prog2.nextApprover.role+')':'?'}.`);
+          alert(`✓ ${signer.name} (${signer.role}) đã ký duyệt bước ${stepOf(signer,'floor')}.\n⏳ Chuyển bước kế tiếp: ${tenNguoiCho(prog2,'floor',true)}.`);
         }
       }
       // Refresh danh sách (giữ file đang xem nếu còn ở pending)
@@ -2229,7 +2229,7 @@ URL.revokeObjectURL(url);
                       if(approvers.length===0||prog.empty) return <span style={{fontSize:'.6rem',color:'#b45309',fontWeight:700,flexShrink:0}}>⚠ Chưa đặt bước</span>;
                       if(prog.rejected) return <span style={{fontSize:'.62rem',color:'#991b1b',fontWeight:800,flexShrink:0}}>Đã từ chối</span>;
                       if(prog.done) return <span style={{fontSize:'.62rem',color:'#14532d',fontWeight:800,flexShrink:0}}>✓ Đủ cấp</span>;
-                      return <button onClick={()=>setApproveModal({open:true,file:f,approver:prog.nextApprover})} disabled={ghStatus.loading} style={{flexShrink:0,background:'#16a34a',color:'#fff',border:'none',borderRadius:8,padding:'9px 14px',fontWeight:900,fontSize:'.74rem',cursor:'pointer'}}>✍ Ký ngay</button>;
+                      return <button onClick={()=>setApproveModal({open:true,file:f,approver:{...prog.nextApprover,name:(prog.nextApprovers||[]).map(a=>a.name).join(' hoặc ')||prog.nextApprover.name,role:(prog.nextApprovers||[]).length>1?`bước ${stepOf(prog.nextApprover,'buy')} — 1 trong ${prog.nextApprovers.length} người ký là qua bậc`:prog.nextApprover.role}})} disabled={ghStatus.loading} style={{flexShrink:0,background:'#16a34a',color:'#fff',border:'none',borderRadius:8,padding:'9px 14px',fontWeight:900,fontSize:'.74rem',cursor:'pointer'}}>✍ Ký ngay</button>;
                     })()}
                   </div>
                   <div style={{fontSize:'.6rem',color:'#94a3b8',fontWeight:700,marginTop:3}}>
@@ -4386,7 +4386,7 @@ URL.revokeObjectURL(url);
                               <div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:5,alignItems:'center'}}>
                                 {prog.chain.map(ap=>{
                                   const act=acts.find(a=>a.id===ap.id);
-                                  const isNext=prog.nextApprover&&prog.nextApprover.id===ap.id&&!prog.rejected;
+                                  const isNext=(prog.nextApprovers||[]).some(x=>x.id===ap.id)&&!prog.rejected;
                                   const bg=act?(act.decision==='approved'?'#dcfce7':'#fee2e2'):isNext?'#fef9c3':'#f1f5f9';
                                   const bc=act?(act.decision==='approved'?'#16a34a':'#dc2626'):isNext?'#f59e0b':'#cbd5e1';
                                   const ic=act?(act.decision==='approved'?'✓':'✗'):isNext?'⏳':'•';
@@ -4411,7 +4411,8 @@ URL.revokeObjectURL(url);
                             if(prog.rejected) return <span style={{fontSize:'.6rem',color:'#991b1b',fontWeight:800}}>Đã từ chối</span>;
                             if(prog.done) return <span style={{fontSize:'.6rem',color:'#14532d',fontWeight:800}}>✓ Duyệt đủ cấp</span>;
                             const nx=prog.nextApprover;
-                            return <button className="btn btn-success btn-xs" onClick={()=>setApproveModal({open:true,file:f,approver:nx})} disabled={ghStatus.loading} style={{fontSize:'.62rem'}} title={`Duyệt / cho ý kiến — nhập PIN để xác nhận. Đang chờ: ${nx.name} (${nx.role})`}>✍ Duyệt / Cho ý kiến</button>;
+                            const nxHien={...nx,name:(prog.nextApprovers||[]).map(a=>a.name).join(' hoặc ')||nx.name,role:(prog.nextApprovers||[]).length>1?`bước ${stepOf(nx,'buy')} — 1 trong ${prog.nextApprovers.length} người ký là qua bậc`:nx.role};
+                            return <button className="btn btn-success btn-xs" onClick={()=>setApproveModal({open:true,file:f,approver:nxHien})} disabled={ghStatus.loading} style={{fontSize:'.62rem'}} title={`Duyệt / cho ý kiến — nhập PIN để xác nhận. Đang chờ: ${tenNguoiCho(prog,'buy',true)}`}>✍ Duyệt / Cho ý kiến</button>;
                           })()}
                           {/* SỬA #1 (R4): Xóa PA — cần PIN quản trị/Giám đốc */}
                           <button onClick={()=>deletePAFromGithub(f)} disabled={ghStatus.loading} title="Xóa phương án này (cần PIN Quản trị/Giám đốc)" style={{fontSize:'.6rem',background:'#fef2f2',color:'#b91c1c',border:'1px solid #fca5a5',padding:'2px 7px',fontWeight:800,borderRadius:5,cursor:'pointer'}}>🗑 Xóa</button>
@@ -4571,7 +4572,7 @@ URL.revokeObjectURL(url);
                                     const tenChuan=x=>String(x||'').toLowerCase().replace(/\s+/g,'');
                                     const act=acts.find(a=>a.id===ap.id)||acts.find(a=>!prog.chain.some(c=>c.id===a.id)&&tenChuan(a.name)===tenChuan(ap.name));
                                     const passed=prog.topSigned>0&&stepOf(ap,'floor')<prog.topSigned&&!act; // bị bỏ qua
-                                    const isNext=prog.nextApprover&&prog.nextApprover.id===ap.id&&!prog.rejected&&!prog.done;
+                                    const isNext=(prog.nextApprovers||[]).some(x=>x.id===ap.id)&&!prog.rejected&&!prog.done;
                                     const bg=act?(act.decision==='approved'?'#dcfce7':'#fee2e2'):isNext?'#fef9c3':passed?'#f8fafc':'#f1f5f9';
                                     const bc=act?(act.decision==='approved'?'#16a34a':'#dc2626'):isNext?'#f59e0b':'#cbd5e1';
                                     const ic=act?(act.decision==='approved'?'✓':'✗'):isNext?'⏳':passed?'⤼':'•';
@@ -4579,7 +4580,7 @@ URL.revokeObjectURL(url);
                                   })}
                                 </div>
                                 <div style={{fontSize:'.6rem',marginTop:3,fontWeight:700,color:prog.done?'#14532d':prog.rejected?'#991b1b':'#92400e'}}>
-                                  {prog.done?(isPending?'✓ Đủ cấp — bấm 🏁 Ban hành để chuyển sang "Đã duyệt"':'✓ Đã duyệt đủ cấp (bước cao nhất đã ký)'):prog.rejected?'✗ Đã bị bác':prog.nextApprover?`⏳ Chờ duyệt: ${prog.nextApprover.name} (${prog.nextApprover.role} · bước ${stepOf(prog.nextApprover,'floor')})`:'⏳ Chờ duyệt'}
+                                  {prog.done?(isPending?'✓ Đủ cấp — bấm 🏁 Ban hành để chuyển sang "Đã duyệt"':'✓ Đã duyệt đủ cấp (bước cao nhất đã ký)'):prog.rejected?'✗ Đã bị bác':prog.nextApprover?`⏳ Chờ duyệt: ${tenNguoiCho(prog,'floor')}`:'⏳ Chờ duyệt'}
                                 </div>
                               </div>
                             );
