@@ -528,7 +528,8 @@ function updatePODelivered_(p, by){
     if (key !== want) continue;
     const oldDel = row[cDel];
     const ordered = cOrd >= 0 ? (parseFloat(row[cOrd]) || 0) : 0;
-    if (ordered > 0 && newDel > ordered) return { ok: false, error: 'TL đã giao (' + newDel + ') lớn hơn TL đặt (' + ordered + ')' };
+    // Giao vượt <= 10% TL đặt là bình thường (cân thực tế) — anh Huy 02-11-2026
+    if (ordered > 0 && newDel > ordered * 1.10) return { ok: false, error: 'TL đã giao (' + newDel + ') vượt quá 10% TL đặt (' + ordered + ')' };
     sh.getRange(i + 1, cDel + 1).setValue(newDel);
     // Cột "Tồn chưa giao": chỉ ghi đè nếu KHÔNG phải công thức
     if (cRem >= 0 && sh.getRange(i + 1, cRem + 1).getFormula() === ''){

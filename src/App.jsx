@@ -1578,7 +1578,7 @@ ${e.message}`);
     if(raw===null) return;
     const val=pn(raw);
     if(val<0){alert('❌ Số không hợp lệ');return;}
-    if(p.ordered>0&&val>p.ordered){alert(`❌ TL đã giao (${fv(val)}) lớn hơn TL đặt (${fv(p.ordered)})`);return;}
+    if(p.ordered>0&&val>p.ordered*1.10){alert(`❌ TL đã giao (${fv(val)}) vượt quá 10% TL đặt (${fv(p.ordered)})`);return;}   // giao vượt <= 10% là bình thường — anh Huy 02-11-2026
     const me=await identifyByPin();
     if(!me) return;
     const res=await gasCall('updatePODelivered',{po:p.po,alloy:p.alloy,temper:p.temper,thickness:p.thickness,width:p.width,length:p.length,coating:p.coating,delivered:val},me.name);
