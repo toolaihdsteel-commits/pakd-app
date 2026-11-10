@@ -463,7 +463,6 @@ function updatePORow_(p, by){
   const ordered = parseFloat(p.ordered);
   if (isNaN(ordered) || ordered <= 0) return { ok: false, error: 'TL đặt không hợp lệ' };
   const delivered = c.del >= 0 ? (parseFloat(data[i][c.del]) || 0) : 0;
-  if (ordered < delivered) return { ok: false, error: 'TL đặt (' + ordered + ') nhỏ hơn TL đã giao (' + delivered + ')' };
   const oldOrd = data[i][c.ord], oldPr = c.pr >= 0 ? data[i][c.pr] : '';
   sh.getRange(i + 1, c.ord + 1).setValue(ordered);
   if (c.pr >= 0 && p.price > 0) sh.getRange(i + 1, c.pr + 1).setValue(parseFloat(p.price));
@@ -528,8 +527,6 @@ function updatePODelivered_(p, by){
     if (key !== want) continue;
     const oldDel = row[cDel];
     const ordered = cOrd >= 0 ? (parseFloat(row[cOrd]) || 0) : 0;
-    // Giao vượt <= 10% TL đặt là bình thường (cân thực tế) — anh Huy 02-11-2026
-    if (ordered > 0 && newDel > ordered * 1.10) return { ok: false, error: 'TL đã giao (' + newDel + ') vượt quá 10% TL đặt (' + ordered + ')' };
     sh.getRange(i + 1, cDel + 1).setValue(newDel);
     // Cột "Tồn chưa giao": chỉ ghi đè nếu KHÔNG phải công thức
     if (cRem >= 0 && sh.getRange(i + 1, cRem + 1).getFormula() === ''){
