@@ -2,6 +2,7 @@ import React from 'react';
 const {useState,useEffect,useRef,useMemo,useCallback,Component}=React;
 import Chart from 'chart.js/auto';
 import {bienTheKhoa,khoaSku,nhanSku} from './lib/chuanhoa';
+import {PADangDungBar,docPADangDung,ghiPADangDung,dauPA,ngayGioPA,ngayNganPA,tuoiPA} from './components/PADangDung';
 import {tenNguoiCho,ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
 import {getCurrentWeekLabel,matchWeekLabel,parseCashFlowCSV} from './lib/cashflow';
 import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
@@ -25,6 +26,18 @@ const App=()=>{
   const closeMore=useCallback(()=>setMoreOpen(false),[]);
   const [inputs,setInputs]=useState(defInputs);
   const [products,setProducts]=useState(defProducts);
+  // R15: PA ĐANG DÙNG trên tab trình duyệt này (sessionStorage → mỗi tab nhớ riêng). dau=null → chốt vân tay ở lượt render kế (sau khi state đã nạp xong)
+  const [paDangDung,setPaDangDung]=useState(()=>docPADangDung());
+  useEffect(()=>{ghiPADangDung(paDangDung);},[paDangDung]);
+  const dauHienTai=useMemo(()=>dauPA(inputs,products),[inputs,products]);
+  useEffect(()=>{if(paDangDung&&paDangDung.dau==null) setPaDangDung(p=>p&&p.dau==null?{...p,dau:dauHienTai}:p);},[paDangDung,dauHienTai]);
+  const paDaChinh=!!(paDangDung&&paDangDung.dau!=null&&paDangDung.dau!==dauHienTai);
+  // Tiêu đề tab trình duyệt mang ngày PA → mở nhiều tab vẫn phân biệt được
+  const tieuDeGocRef=useRef(typeof document!=='undefined'?document.title:'');
+  useEffect(()=>{
+    if(typeof document==='undefined') return;
+    document.title=paDangDung?`📌 ${ngayNganPA(paDangDung.savedAt)}${paDaChinh?' ✎':''} · ${paDangDung.label} — PAKD`:tieuDeGocRef.current;
+  },[paDangDung,paDaChinh]);
   const [inventory,setInvs]=useState(defInventory);
   const [minStockRows,setMinStockRows]=useState(defMinStock);
   const [sellingPrices,setSP]=useState(defSP);
@@ -144,15 +157,17 @@ const App=()=>{
     if(label===null) return;
     try{
       const drafts=JSON.parse(localStorage.getItem('pakd_local_drafts')||'[]');
+      const idMoi='d'+Date.now(),luc=new Date().toISOString();
       drafts.unshift({
-        id:'d'+Date.now(),
+        id:idMoi,
         label:label.trim()||nameDefault,
-        savedAt:new Date().toISOString(),
+        savedAt:luc,
         inputs,products,sellingPrices,cfMode,cfManualWeek,
         snapshot:{totalKg:r?r.totalKg:0,totalVND:r?r.invoiceVND:0,totalGrossProfit:r?r.totalGrossProfit:0},
       });
       localStorage.setItem('pakd_local_drafts',JSON.stringify(drafts.slice(0,100)));
       setLocalDrafts(drafts.slice(0,100));
+      setPaDangDung({nguon:'local',id:idMoi,label:label.trim()||nameDefault,savedAt:luc,dau:null});
       alert('✓ Đã lưu nháp trên máy này (localStorage). Mở bằng nút "💾 Nháp Local".');
     }catch(e){ alert('❌ Lỗi lưu nháp: '+e.message); }
   },[inputs,products,sellingPrices,cfMode,cfManualWeek]);
@@ -264,6 +279,7 @@ const App=()=>{
       if(payload.cfMode) setCFMode(payload.cfMode);
       if(payload.cfManualWeek!=null) setCFManualWeek(payload.cfManualWeek);
       setLoadedApprovals(Array.isArray(payload.approvals)?payload.approvals:[]);
+      setPaDangDung({nguon:'github',id:file.name,label:file.name.replace(/\.json$/,''),savedAt:payload.savedAt||null,savedBy:payload.savedBy||payload.requestedBy||'',dau:null});
       setGhStatus(p=>({...p,loading:false,lastAction:`✓ Đã tải ${file.name}`,loadOpen:false}));
       const statusTxt=payload.status==='approved'?`\n✓ Trạng thái: ĐÃ DUYỆT bởi ${payload.approvedBy||'?'} lúc ${payload.approvedAt||'?'}`:payload.status==='rejected'?`\n✗ Trạng thái: TỪ CHỐI`:`\n⏳ Trạng thái: CHỜ DUYỆT`;
       const noteTxt=payload.requestNote?`\n📝 Ghi chú yêu cầu: ${payload.requestNote}`:'';
@@ -2553,6 +2569,7 @@ URL.revokeObjectURL(url);
               </div>
 
               {/* Lô hàng dự định mua — cố định ~350px, cuộn tbody khi >5 SKU */}
+              <PADangDungBar pa={paDangDung} dirty={paDaChinh} now={nowTick} onBo={()=>setPaDangDung(null)} onMoNhap={()=>setDraftModalOpen(true)}/>
               <div className="lohang-wrap" style={{flexShrink:0,background:bg2,borderBottom:`1px solid ${border1}`}}>
                 {/* thead cố định */}
                 <div style={{padding:'5px 11px 0'}}>
@@ -3916,7 +3933,7 @@ URL.revokeObjectURL(url);
       {result&&(
         <div className="print-container">
           <div className="print-title">BÁO CÁO PHƯƠNG ÁN MUA HÀNG (PAKD 7.0)</div>
-          <div className="print-subtitle">Ngày in: {new Date().toLocaleDateString('vi-VN')} | Đơn vị: VNĐ & Kg</div>
+          <div className="print-subtitle">Ngày in: {new Date().toLocaleDateString('vi-VN')}{paDangDung?` | Phương án: ${paDangDung.label} — lưu ${ngayGioPA(paDangDung.savedAt)}${paDaChinh?' (đã chỉnh sau khi tải)':''}`:' | Phương án mới (chưa lưu)'} | Đơn vị: VNĐ & Kg</div>
           <div className="print-section">
             <div className="print-section-title">I. Thông số</div>
             <div className="print-grid-4">
@@ -4450,12 +4467,12 @@ URL.revokeObjectURL(url);
             ):(
               <div style={{display:'flex',flexDirection:'column',gap:6}}>
                 {localDrafts.map((d,i)=>(
-                  <div key={d.id} style={{display:'flex',alignItems:'center',gap:10,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:7,padding:'9px 12px'}}>
+                  <div key={d.id} style={{display:'flex',alignItems:'center',gap:10,background:paDangDung&&paDangDung.id===d.id?'#eff6ff':'#f8fafc',border:paDangDung&&paDangDung.id===d.id?'2px solid #2563eb':'1px solid #e2e8f0',borderRadius:7,padding:'9px 12px'}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:800,fontSize:'.82rem',color:'#0f172a'}}>{d.label}</div>
-                      <div style={{fontSize:'.66rem',color:'#475569',fontWeight:600,marginTop:2}}>{d.savedAt?new Date(d.savedAt).toLocaleString('vi-VN'):''} · {d.snapshot?fv(d.snapshot.totalKg)+'kg · '+fv((d.snapshot.totalVND||0)/1e6)+'tr':''}</div>
+                      <div style={{fontWeight:800,fontSize:'.82rem',color:'#0f172a'}}>{d.label}{paDangDung&&paDangDung.id===d.id&&<span style={{marginLeft:6,fontSize:'.58rem',fontWeight:900,background:'#2563eb',color:'#fff',borderRadius:10,padding:'1px 7px'}}>📌 ĐANG DÙNG Ở TAB NÀY{paDaChinh?' · đã chỉnh':''}</span>}</div>
+                      <div style={{fontSize:'.66rem',color:'#475569',fontWeight:600,marginTop:2}}><b className="mono" style={{color:'#1d4ed8'}}>🗓 {ngayGioPA(d.savedAt)}</b> ({tuoiPA(d.savedAt,nowTick)}) · {d.snapshot?fv(d.snapshot.totalKg)+'kg · '+fv((d.snapshot.totalVND||0)/1e6)+'tr':''}</div>
                     </div>
-                    <button className="btn btn-purple btn-xs" onClick={()=>{if(d.inputs)setInputs(d.inputs);if(d.products)setProducts(d.products);if(Array.isArray(d.sellingPrices)&&d.sellingPrices.length>0)setSP(d.sellingPrices);if(d.cfMode)setCFMode(d.cfMode);if(d.cfManualWeek!=null)setCFManualWeek(d.cfManualWeek);setDraftModalOpen(false);setTab('main');alert('✓ Đã tải nháp "'+d.label+'" vào màn hình.');}} style={{fontSize:'.65rem'}}>⬇ Tải</button>
+                    <button className="btn btn-purple btn-xs" onClick={()=>{if(d.inputs)setInputs(d.inputs);if(d.products)setProducts(d.products);if(Array.isArray(d.sellingPrices)&&d.sellingPrices.length>0)setSP(d.sellingPrices);if(d.cfMode)setCFMode(d.cfMode);if(d.cfManualWeek!=null)setCFManualWeek(d.cfManualWeek);setPaDangDung({nguon:'local',id:d.id,label:d.label,savedAt:d.savedAt||null,dau:null});setDraftModalOpen(false);setTab('main');alert('✓ Đã tải nháp "'+d.label+'"\n🗓 Lưu lúc: '+ngayGioPA(d.savedAt));}} style={{fontSize:'.65rem'}}>⬇ Tải</button>
                     <button className="btn-danger" onClick={()=>{const next=localDrafts.filter(x=>x.id!==d.id);setLocalDrafts(next);try{localStorage.setItem('pakd_local_drafts',JSON.stringify(next));}catch(e){}}} title="Xóa nháp này"><Ic.X/></button>
                   </div>
                 ))}
