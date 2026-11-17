@@ -587,8 +587,9 @@ export const EastMoneyChart=({marketData=[],bg1,bg2,border2})=>{
         </div>{/* hết vùng toàn màn hình */}
 
         <div style={{fontSize:'.64rem',color:'#94a3b8',fontWeight:600,marginTop:6,lineHeight:1.6}}>
-          Nến 15 phút / 1 giờ lấy từ <b>Sina Finance</b> qua proxy Apps Script (EastMoney trả sai
-          lịch sử trong ngày — đã đối chiếu chéo hai nguồn khớp nhau ngày 22/08).
+          Nến 15 phút / 1 giờ: 5 ngày giao dịch gần nhất dựng từ <b>luồng 1 phút EastMoney</b> (khớp nến
+          chính thức của 东方财富期货 — đối chiếu 17/11); phần cũ hơn lấy từ <b>Sina Finance</b> qua proxy
+          Apps Script, có thể lệch nhẹ (EastMoney không cấp lịch sử trong ngày sâu hơn).
           {' '}Các khung còn lại: EastMoney (cùng nguồn phần mềm 东方财富期货) · trục thời gian theo <b>giờ sàn Thượng Hải</b>
           (giờ VN = trừ 1 tiếng; phiên đêm 21:00–01:00 giờ sàn = 20:00–00:00 giờ ta) ·
           quy ước màu <b style={{color:'#16a34a'}}>xanh = tăng</b> / <b style={{color:'#dc2626'}}>đỏ = giảm</b> (ngược app Trung Quốc) ·
