@@ -12,9 +12,9 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-// Dùng CHUNG phép ghép 15p với trình duyệt — ảnh tĩnh và biểu đồ sống không
-// được lệch nhau (hàm thuần, không I/O; import được từ node trần).
-import { nenTuSina, lamSachNenSina, gopTrends15, ghepNen15 } from '../src/lib/eastmoney.js';
+// Dùng CHUNG phép ghép 15p / 60p với trình duyệt — ảnh tĩnh và biểu đồ sống
+// không được lệch nhau (hàm thuần, không I/O; import được từ node trần).
+import { nenTuSina, lamSachNenSina, gopTrends15, gopTrends60, ghepNen } from '../src/lib/eastmoney.js';
 
 const CURL = process.platform === 'win32'
   ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'curl.exe')
@@ -29,7 +29,8 @@ const CAN_CHUP = [
   { ma: 'alm', khung: '102', klt: 102, lmt: 600 },
   // 15/60: nguồn SINA (22/08/2026 — lần trước bỏ vì push2his hỏng lịch sử
   // trong ngày; Sina thì sạch và đã đối chiếu chéo khớp EastMoney). Sina là
-  // host khác, không dính hạn mức chặn IP của EastMoney.
+  // host khác, không dính hạn mức chặn IP của EastMoney. Từ 17/11/2026 cả hai
+  // khung được đè nến dựng từ luồng 1 phút trends2 (xem vòng chụp bên dưới).
   { ma: 'alm', khung: '60', klt: 60, lmt: 500, sina: { symbol: 'AL0', type: 60 } },
   { ma: 'alm', khung: '15', klt: 15, lmt: 400, sina: { symbol: 'AL0', type: 15 } },
   { ma: 'alm', khung: '103', klt: 103, lmt: 400 },
@@ -215,6 +216,13 @@ function docNen(d, lmt) {
   return nen.length > lmt ? nen.slice(-lmt) : nen;
 }
 
+// Luồng 1 phút trends2 dùng chung cho 60 và 15 — gọi EastMoney MỘT lần mỗi
+// lượt (nhớ cả lỗi: bị chặn thì gọi lại 9 giây sau cũng vô ích).
+let huaTrends = null;
+const layTrends = () => (huaTrends ??= goi('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=113.alm'
+  + '&ndays=5&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'
+  + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58', 2).then((r) => r?.data?.trends || []));
+
 let ok = 0, hong = 0, chan = 0;
 
 for (const c of canLam) {
@@ -228,20 +236,19 @@ for (const c of canLam) {
       if (bt.sina) {
         const arr = await goiSina(bt.sina.symbol, bt.sina.type);
         tenHien = `Nhôm SHFE ${bt.sina.symbol} (Sina)`;
-        if (c.khung === '15') {
-          // 15p (17/11/2026): Sina lệch EastMoney một bước giá, khối lượng
-          // sai, có nến phẳng giả, nến 00:00 đêm thứ Sáu mang ngày thứ Hai.
+        if (c.khung === '15' || c.khung === '60') {
+          // 15p / 60p (17/11/2026): Sina lệch EastMoney (giá, khối lượng,
+          // nến phẳng giả), nến 00:00 đêm thứ Sáu mang ngày thứ Hai.
           // Làm sạch Sina rồi đè nến dựng từ luồng 1 phút trends2 lên — y
           // hệt trình duyệt. trends2 lỗi thì vẫn ghi Sina đã làm sạch.
-          nen = lamSachNenSina(nenTuSina(arr));
+          nen = lamSachNenSina(nenTuSina(arr), { buoc: Number(c.khung) * 60000 });
           try {
-            const d = (await goi('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=113.alm'
-              + '&ndays=5&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'
-              + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58', 2)).data;
-            const nenEM = gopTrends15(d?.trends || [], { nenSina: nen });
+            const gop = c.khung === '15' ? gopTrends15 : gopTrends60;
+            const nenEM = gop(await layTrends(), { nenSina: nen });
             if (!nenEM.length) throw new Error('trends2 rỗng');
-            nen = ghepNen15(nen, nenEM);
+            nen = ghepNen(nen, nenEM);
             tenHien = 'Nhôm SHFE AL0 (Sina + EastMoney 1 phút)';
+            ghiChu.push(`trends2: ghép ${nenEM.length} nến EM`);
           } catch (e) {
             ghiChu.push(`trends2: ${/Command failed|phản hồi rỗng/i.test(e.message) ? 'bị chặn' : e.message.slice(0, 40)} — giữ Sina đã làm sạch`);
           }

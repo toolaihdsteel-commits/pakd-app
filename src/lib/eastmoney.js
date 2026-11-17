@@ -25,7 +25,7 @@ const TTL_SS = 12 * 60 * 60 * 1000;        // 12 giờ
 const TOI_DA_LUU = 900;                    // số nến lưu vào sessionStorage (tránh đầy quota)
 // Đổi số này mỗi khi sửa cách phân tích dữ liệu → cache cũ tự bị bỏ, không cần
 // người dùng xoá tay. (v1 từng lưu nhầm nến ngày dưới khoá khung giờ.)
-const PB_CACHE = 'v4';   // v3: 15/60 chuyển nguồn Sina · v4: 15p ghép trends2 EastMoney (17/11)
+const PB_CACHE = 'v5';   // v3: 15/60 chuyển nguồn Sina · v4: 15p ghép trends2 EastMoney (17/11) · v5: 60p cũng ghép trends2
 
 export const MA_NHOM = [
   { ma: 'alm', ten: 'Nhôm Thượng Hải A00', lo: 5,  buocGia: 5 },
@@ -49,7 +49,8 @@ export const KHUNG_TG = [
   //     chup-nen.mjs tải bằng curl.
   // 17/11/2026: riêng 15p, Sina lệch EastMoney (giá 1 bước, khối lượng, nến
   // phẳng giả, nến 00:00 sai ngày) → đè nến dựng từ luồng 1 phút trends2 lên
-  // (xem gopTrends15 / ghepNen15). Khung 60 vẫn thuần Sina.
+  // (xem gopTrends15 / ghepNen). Khung 60 đi cùng đường (gopTrends60): kline
+  // 60 của EastMoney cũng hỏng lịch sử, Sina 60 cũng ghi nến 00:00 sai ngày.
   { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400, sina: true },
   { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500, sina: true },
   { k: '101',    l: 'Ngày',       klt: 101,  period: { span: 1,  type: 'day'    }, soNen: 800  },
@@ -175,8 +176,24 @@ export function locNenHopLe(nen, { lo = 5, ten = 'nguồn' } = {}) {
 // tools/chup-nen.mjs dùng chung một phép ghép.
 const PHUT = 60000;
 const P15 = 15 * PHUT;
+const P60 = 60 * PHUT;
 // Phút trong ngày theo giờ Bắc Kinh (+08:00, không theo giờ máy)
 const phutBK = (ts) => { const d = new Date(ts + 8 * 3600000); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
+
+// Mốc nến (nhãn = giờ KẾT THÚC) chứa phút có nhãn ts.
+// 15p: làm tròn LÊN bội 15 phút (+08:00 là bội 15 phút → tính trên UTC vẫn đúng).
+const moc15 = (ts) => Math.ceil(ts / P15) * P15;
+// 60p theo quy ước EastMoney (đã đối chiếu nến chính thức 17/11/2026): phiên
+// ngày SHFE 09:00–10:15 · 10:30–11:30 · 13:30–15:00 cắt thành 4 nến đếm theo
+// GIỜ GIAO DỊCH, bỏ qua giờ nghỉ: 10:00 · 11:15 (= 10:00–10:15 + 10:30–11:15) ·
+// 14:15 (= 11:15–11:30 + 13:30–14:15) · 15:00 (chỉ 45 phút). Phiên đêm làm
+// tròn LÊN giờ chẵn (22:00 · 23:00 · 00:00 · 01:00 — 00:00 thuộc ngày lịch kế tiếp).
+const MOC_NGAY_60 = [600, 675, 855, 900];          // 10:00 · 11:15 · 14:15 · 15:00 (phút trong ngày)
+const moc60 = (ts) => {
+  const p = phutBK(ts);
+  if (p > 540 && p <= 900) return ts + (MOC_NGAY_60.find((m) => p <= m) - p) * PHUT;
+  return Math.ceil(ts / P60) * P60;
+};
 
 /** Mảng Sina [{d,o,h,l,c,v}] → nến của app, GIỮ NGUYÊN thứ tự gốc (lamSachNenSina cần). */
 export function nenTuSina(arr) {
@@ -191,34 +208,37 @@ export function nenTuSina(arr) {
 }
 
 /**
- * Làm sạch nến 15p của Sina (đầu vào theo THỨ TỰ GỐC của Sina).
+ * Làm sạch nến 15p / 60p của Sina (đầu vào theo THỨ TỰ GỐC của Sina);
+ * buoc = độ dài nến (ms), mặc định 15 phút.
  * Sina đẩy nến 00:00 của đêm thứ Sáu xuống CUỐI phiên đêm (sau nến 01:00 thứ
  * Bảy) và ghi ngày thứ Hai ("2026-11-16 00:00:00" thay vì 14/11 00:00) → sắp
  * theo mốc thì nến này nhảy sang sáng thứ Hai, sai vị trí. Nhận diện: nến
- * 00:00 không đứng ngay sau nến 23:45 liền trước nó, trong khi nến đứng
- * trước nó thuộc cùng phiên đêm với một nến 23:45 (ngày D) mà khe D+1 00:00
- * còn trống, và mốc ghi sai cách xa hơn một ngày → gán về D+1 00:00.
+ * 00:00 không đứng ngay sau nến cuối ngày (23:45 với 15p, 23:00 với 60p) liền
+ * trước nó, trong khi nến đứng trước nó thuộc cùng phiên đêm với một nến
+ * cuối ngày (ngày D) mà khe D+1 00:00 còn trống, và mốc ghi sai cách xa hơn
+ * một ngày → gán về D+1 00:00.
  * Sau đó sắp tăng dần, khử trùng mốc (giữ bản xuất hiện sau trong nguồn).
  */
-export function lamSachNenSina(nen) {
+export function lamSachNenSina(nen, { buoc = P15 } = {}) {
   const co = new Set((nen || []).map((n) => n.timestamp));
   const ra = [];
-  let moc2345 = null;                       // nến 23:45 gần nhất trong nguồn
+  const phutCuoiNgay = 24 * 60 - buoc / PHUT;   // 23:45 (15p) · 23:00 (60p)
+  let mocCuoi = null;                       // nến cuối ngày gần nhất trong nguồn
   for (const n of nen || []) {
     let x = n;
     const p = phutBK(n.timestamp);
-    if (p === 0 && moc2345 != null) {
+    if (p === 0 && mocCuoi != null) {
       const truoc = ra[ra.length - 1];
-      const khe = moc2345 + P15;
-      const dungCho = truoc && truoc.timestamp === n.timestamp - P15;
-      // nến trước thuộc cùng phiên đêm với 23:45 đó (tối đa tới 01:00)
-      const cungPhien = truoc && truoc.timestamp >= moc2345 && truoc.timestamp <= moc2345 + 75 * PHUT;
+      const khe = mocCuoi + buoc;
+      const dungCho = truoc && truoc.timestamp === n.timestamp - buoc;
+      // nến trước thuộc cùng phiên đêm với nến cuối ngày đó (tối đa tới 01:00)
+      const cungPhien = truoc && truoc.timestamp >= mocCuoi && truoc.timestamp <= mocCuoi + buoc + 60 * PHUT;
       if (!dungCho && cungPhien && !co.has(khe) && n.timestamp - khe > 24 * 3600000) {
         x = { ...n, timestamp: khe };
         co.add(khe);
       }
     }
-    if (p === 23 * 60 + 45) moc2345 = n.timestamp;
+    if (p === phutCuoiNgay) mocCuoi = n.timestamp;
     ra.push(x);
   }
   ra.sort((a, b) => a.timestamp - b.timestamp);          // sort ổn định
@@ -232,21 +252,27 @@ export function lamSachNenSina(nen) {
 
 /**
  * Gộp luồng 1 phút trends2 ("YYYY-MM-DD HH:mm,open,close,high,low,volume,amount,avg",
- * giờ Bắc Kinh, nhãn = CUỐI phút) thành nến 15p nhãn theo giờ KẾT THÚC —
- * giống Sina và EastMoney (đầu phiên đêm 21:15, đầu ngày 09:15, sau nghỉ
- * 10:45 và 13:45, qua nửa đêm 23:46…00:00 → nến 00:00 của ngày hôm sau).
- *   • Phút t thuộc nến có mốc = làm tròn LÊN bội 15 phút.
+ * giờ Bắc Kinh, nhãn = CUỐI phút) thành nến nhãn theo giờ KẾT THÚC — giống
+ * Sina và EastMoney. mocCua(ts) cho mốc nến chứa phút ts:
+ *   • 15p (moc15): làm tròn LÊN bội 15 phút (đầu phiên đêm 21:15, đầu ngày
+ *     09:15, sau nghỉ 10:45 và 13:45, 23:46…00:00 → nến 00:00 ngày hôm sau).
+ *   • 60p (moc60): 22:00 · 23:00 · 00:00 · 01:00 · 10:00 · 11:15 · 14:15 · 15:00.
  *   • Điểm mở phiên (điểm đầu một phiên, phút chia hết 15, volume 0 — vd
- *     21:00) thuộc nến KẾ TIẾP. "Đầu phiên" = cách điểm trước ≥ 10 phút:
- *     nghỉ thật giữa các phiên SHFE ngắn nhất 15 phút (10:15→10:30), còn
- *     trends2 hụt vài phút giữa phiên thì KHÔNG được coi là mở phiên và giá của nó là giá mở nến đó.
+ *     21:00) thuộc nến KẾ TIẾP (= nến của phút sau nó). "Đầu phiên" = cách
+ *     điểm trước ≥ 10 phút: nghỉ thật giữa các phiên SHFE ngắn nhất 15 phút
+ *     (10:15→10:30). Còn khi trends2 hụt vài phút giữa phiên rồi gặp điểm
+ *     :15 volume 0, điểm đó KHÔNG phải mở phiên: nó ở lại nến của chính nó,
+ *     và giá của nó không bị lấy làm giá mở cho nến kế tiếp.
  *   • trends2 chỉ có trường open ở ngày giao dịch hiện hành (ngày cũ open=0)
  *     → giá mở: open phút đầu nếu > 0; không thì open nến Sina cùng mốc nếu
  *     nằm trong [low, high]; không nữa thì close nến trước, kẹp vào [low, high].
  *   • H = max, L = min, C = close phút cuối, V = tổng volume,
  *     turnover = tổng amount (để locNenHopLe soi được thang giá).
  */
-export function gopTrends15(trends, { nenSina = [] } = {}) {
+export function gopTrends15(trends, tuyChon) { return gopTrends(trends, moc15, tuyChon); }
+export function gopTrends60(trends, tuyChon) { return gopTrends(trends, moc60, tuyChon); }
+
+function gopTrends(trends, mocCua, { nenSina = [] } = {}) {
   const sinaTheoMoc = new Map((nenSina || []).map((n) => [n.timestamp, n]));
   const nen = [];
   let tsTruoc = null;
@@ -274,7 +300,7 @@ export function gopTrends15(trends, { nenSina = [] } = {}) {
     const dauPhien = tsTruoc == null || ts - tsTruoc >= 10 * PHUT;
     tsTruoc = ts;
     const moPhien = dauPhien && ts % P15 === 0 && v === 0;   // +08:00 là bội 15 phút → % trên UTC vẫn đúng
-    const moc = moPhien ? ts + P15 : Math.ceil(ts / P15) * P15;
+    const moc = mocCua(moPhien ? ts + PHUT : ts);
     if (!cur || cur.n.timestamp !== moc) {
       dong();
       cur = { dau: { o, c: cl, moPhien },
@@ -292,18 +318,19 @@ export function gopTrends15(trends, { nenSina = [] } = {}) {
 }
 
 /**
- * Ghép: nến EastMoney (gopTrends15) ĐÈ lên nến Sina ĐÃ LÀM SẠCH trong đoạn EM
- * phủ [nến EM đầu, nến EM cuối] — mốc chỉ có ở EM thì thêm, nến Sina trong
- * đoạn đó mà EM không có mốc thì bỏ (vd nến phẳng giả). Nến Sina ngoài đoạn
- * giữ nguyên. EM rỗng → trả nguyên Sina. Kết quả tăng dần, không trùng mốc.
+ * Ghép (dùng chung 15p / 60p): nến EastMoney (gopTrends15 / gopTrends60) ĐÈ
+ * lên nến Sina ĐÃ LÀM SẠCH trong đoạn EM phủ [nến EM đầu, nến EM cuối] — mốc
+ * chỉ có ở EM thì thêm, nến Sina trong đoạn đó mà EM không có mốc thì bỏ
+ * (vd nến phẳng giả). Nến Sina ngoài đoạn giữ nguyên. EM rỗng → trả nguyên Sina. Kết quả tăng dần, không trùng mốc.
  */
-export function ghepNen15(nenSina, nenEM) {
+export function ghepNen(nenSina, nenEM) {
   const sina = nenSina || [];
   if (!nenEM?.length) return [...sina];
   const dau = nenEM[0].timestamp, cuoi = nenEM[nenEM.length - 1].timestamp;
   return [...sina.filter((n) => n.timestamp < dau || n.timestamp > cuoi), ...nenEM]
     .sort((a, b) => a.timestamp - b.timestamp);
 }
+export const ghepNen15 = ghepNen;
 
 // ─── Nhớ tạm ──────────────────────────────────────────────────────────────
 const ram = new Map();
@@ -403,17 +430,18 @@ async function taiNenSina(ma, khungK, signal, { lamSach = false } = {}) {
   const d = await goiJSON(u, { signal, lanThu: 2, timeout: 12000 });
   if (!d?.ok || !Array.isArray(d.nen) || !d.nen.length)
     throw new Error(d?.error || 'proxy không trả về nến');
-  // Khung 15p: sửa nến 00:00 ghi sai ngày TRƯỚC khi lọc — nhận diện dựa vào
-  // thứ tự gốc của Sina, lọc bỏ nến hỏng trước thì có thể mất nến 23:45 làm mốc.
-  // Khung 60 giữ nguyên hành vi cũ.
-  const nen = lamSach ? lamSachNenSina(nenTuSina(d.nen)) : nenTuSina(d.nen);
+  // Sửa nến 00:00 ghi sai ngày TRƯỚC khi lọc — nhận diện dựa vào thứ tự gốc
+  // của Sina, lọc bỏ nến hỏng trước thì có thể mất nến cuối ngày làm mốc.
+  const nen = lamSach
+    ? lamSachNenSina(nenTuSina(d.nen), { buoc: Number(khungK) * PHUT })
+    : nenTuSina(d.nen);
   // Sina không có turnover → locNenHopLe chỉ soi được phần cơ bản. Chấp nhận
   // được: nguồn này đã đối chiếu chéo khớp EastMoney ngày 22/08.
   const q = locNenHopLe(nen, { lo: timMa(ma).lo, ten: 'Sina' });
   return { ten: d.ten || 'Nhôm SHFE (Sina)', nen: q.nen, kieu: 'nen' };
 }
 
-// ─── Nguồn 5: luồng 1 phút trends2 nhiều ngày — làm đúng nến 15p ─────────
+// ─── Nguồn 5: luồng 1 phút trends2 nhiều ngày — làm đúng nến 15p / 60p ───
 // ndays tối đa 5 (lớn hơn EastMoney trả rỗng). Lấy đủ 8 trường để có
 // open/high/low/volume/amount, khác taiTrongNgay chỉ cần giá + khối lượng.
 async function taiTrends5(ma, signal) {
@@ -425,28 +453,30 @@ async function taiTrends5(ma, signal) {
   return d.trends;
 }
 
-// Khung 15p = Sina (đã làm sạch) + nến dựng từ trends2 đè lên. Hai nguồn tải
-// SONG SONG. Sina là xương sống: Sina lỗi thì ném để layNen lùi như cũ
+// Khung 15p / 60p = Sina (đã làm sạch) + nến dựng từ trends2 đè lên. Hai nguồn
+// tải SONG SONG. Sina là xương sống: Sina lỗi thì ném để layNen lùi như cũ
 // (sessionStorage → ảnh tĩnh). trends2 chỉ là lớp làm đúng: lỗi/rỗng/sai
 // thang giá thì vẫn trả Sina đã làm sạch, kèm canhBao cho người dùng biết.
-async function taiNen15(ma, signal) {
+const GOP_THEO_KHUNG = { '15': [gopTrends15, '15 phút'], '60': [gopTrends60, '1 giờ'] };
+async function taiNenGhep(ma, khungK, signal) {
+  const [gop, tenKhung] = GOP_THEO_KHUNG[khungK];
   const huaEM = ma === 'alm' && GAS_URL ? taiTrends5(ma, signal).catch((e) => e) : null;
-  const goi = await taiNenSina(ma, '15', signal, { lamSach: true });
+  const goi = await taiNenSina(ma, khungK, signal, { lamSach: true });
   let loiEM;
   try {
     const kq = await huaEM;
     if (!kq) return goi;
     if (kq instanceof Error) throw kq;
-    const nenEM = gopTrends15(kq, { nenSina: goi.nen });
+    const nenEM = gop(kq, { nenSina: goi.nen });
     if (!nenEM.length) throw new Error('luồng 1 phút rỗng');
-    const q = locNenHopLe(ghepNen15(goi.nen, nenEM), { lo: timMa(ma).lo, ten: 'EastMoney + Sina' });
+    const q = locNenHopLe(ghepNen(goi.nen, nenEM), { lo: timMa(ma).lo, ten: 'EastMoney + Sina' });
     return { ...goi, nen: q.nen };
   } catch (e) {
     if (signal?.aborted) throw e;
     loiEM = e;
   }
   return { ...goi, canhBao: `Không tải được luồng 1 phút EastMoney (${loiEM.message}) — `
-    + 'nến 15 phút đang theo Sina, có thể lệch EastMoney một bước giá.' };
+    + `nến ${tenKhung} đang theo Sina, có thể lệch EastMoney một bước giá.` };
 }
 
 // ═══ HÀM CHÍNH ═══════════════════════════════════════════════════════════
@@ -465,7 +495,7 @@ export async function layNen(ma, khungK, { signal, boQuaCache = false } = {}) {
     const goi = kh.klt == null
       ? await taiTrongNgay(ma, signal)
       : kh.sina
-        ? (khungK === '15' ? await taiNen15(ma, signal) : await taiNenSina(ma, khungK, signal))
+        ? await taiNenGhep(ma, khungK, signal)
         : await taiNenK(ma, kh.klt, kh.soNen, signal);
     ram.set(khoa, { goi, luc: Date.now() });
     ghiSS(khoa, goi);
