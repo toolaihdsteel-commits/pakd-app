@@ -237,7 +237,9 @@ export function lamSachNenSina(nen) {
  * 10:45 và 13:45, qua nửa đêm 23:46…00:00 → nến 00:00 của ngày hôm sau).
  *   • Phút t thuộc nến có mốc = làm tròn LÊN bội 15 phút.
  *   • Điểm mở phiên (điểm đầu một phiên, phút chia hết 15, volume 0 — vd
- *     21:00) thuộc nến KẾ TIẾP và giá của nó là giá mở nến đó.
+ *     21:00) thuộc nến KẾ TIẾP. "Đầu phiên" = cách điểm trước ≥ 10 phút:
+ *     nghỉ thật giữa các phiên SHFE ngắn nhất 15 phút (10:15→10:30), còn
+ *     trends2 hụt vài phút giữa phiên thì KHÔNG được coi là mở phiên và giá của nó là giá mở nến đó.
  *   • trends2 chỉ có trường open ở ngày giao dịch hiện hành (ngày cũ open=0)
  *     → giá mở: open phút đầu nếu > 0; không thì open nến Sina cùng mốc nếu
  *     nằm trong [low, high]; không nữa thì close nến trước, kẹp vào [low, high].
@@ -269,7 +271,7 @@ export function gopTrends15(trends, { nenSina = [] } = {}) {
     const o = so(c[1]), cl = so(c[2]), h = so(c[3]), l = so(c[4]);
     const v = so(c[5]) ?? 0, tien = so(c[6]) ?? 0;
     if (ts == null || !(cl > 0) || !(h > 0) || !(l > 0)) continue;
-    const dauPhien = tsTruoc == null || ts - tsTruoc > PHUT;
+    const dauPhien = tsTruoc == null || ts - tsTruoc >= 10 * PHUT;
     tsTruoc = ts;
     const moPhien = dauPhien && ts % P15 === 0 && v === 0;   // +08:00 là bội 15 phút → % trên UTC vẫn đúng
     const moc = moPhien ? ts + P15 : Math.ceil(ts / P15) * P15;

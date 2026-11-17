@@ -218,6 +218,26 @@ console.log('\n── Khung 15 phút: ghép trends2 EastMoney lên Sina ──')
     ok('Không có nến mốc 10:30 / 21:00 / 09:00 / 13:30', mocCam.length === 0,
        mocCam.slice(0, 3).map((n) => nhan(n.timestamp)).join(', '));
 
+    // Hụt phút giữa phiên ≠ mở phiên: điểm :15 volume 0 sau 1–2 phút hụt
+    // phải ở lại nến :15, không được đẩy sang nến :30 (đổi giá mở nến đó).
+    const p = (t, o, c, v) => `2026-11-18 ${t},${o},${c},${Math.max(o || c, c)},${Math.min(o || c, c)},${v},${v * c * 5},0`;
+    const hut = [p('21:00', 22000, 22000, 0), ...Array.from({ length: 12 }, (_, i) =>
+      p(`21:${String(i + 1).padStart(2, '0')}`, 22000, 22000 + 5 * i, 10)),   // hụt 21:13, 21:14
+      p('21:15', 0, 22100, 0), p('21:16', 22010, 22020, 10), p('21:17', 22020, 22030, 10)];
+    const nHut = M.gopTrends15(hut);
+    const n15 = nHut.find((n) => n.timestamp === moc('2026-11-18 21:15'));
+    const n30 = nHut.find((n) => n.timestamp === moc('2026-11-18 21:30'));
+    ok('Hụt phút giữa phiên: điểm 21:15 (v=0) ở lại nến 21:15, không đổi giá mở nến 21:30',
+       n15?.close === 22100 && n15?.open === 22000 && n30?.open === 22010,
+       `21:15 o ${n15?.open} c ${n15?.close} · 21:30 o ${n30?.open}`);
+    const moThat = M.gopTrends15([p('14:59', 22050, 22060, 5), p('15:00', 22060, 22070, 5),
+      p('21:00', 22200, 22200, 0), p('21:01', 22210, 22220, 8)]);
+    const m2115 = moThat.find((n) => n.timestamp === moc('2026-11-18 21:15'));
+    ok('Mở phiên thật (21:00 v=0 sau khoảng hở ≥ 15 phút) vẫn thuộc nến 21:15, giá mở = giá 21:00',
+       m2115?.open === 22200 && !moThat.some((n) => n.timestamp === moc('2026-11-18 21:00'))
+       && nHut[0].timestamp === moc('2026-11-18 21:15') && nHut[0].open === 22000,
+       `21:15 o ${m2115?.open}`);
+
     // Nến Sina cũ hơn đoạn EM phủ giữ nguyên
     const dauEM = nenEM[0]?.timestamp;
     const cuS = sinaSach.filter((n) => n.timestamp < dauEM);
