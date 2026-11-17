@@ -140,5 +140,118 @@ ok('15 phút và 1 giờ mang cờ sina',
    KHUNG_TG.filter((k) => k.sina).map((k) => k.k).sort().join(',') === '15,60');
 ok('Đủ 6 khung hiển thị', KHUNG_TG.length === 6);
 
+// ═══ 8. Khung 15 phút: ghép luồng 1 phút EastMoney lên nến Sina (17/11) ══
+// Giám đốc thấy biểu đồ 15p lệch app gốc 东方财富期货. Đo 21 nến gần nhất:
+// Sina lệch O/H/L/C một bước giá ở 11/21 nến, khối lượng sai nặng (16/11
+// 22:30: EM 5351, Sina 921), có nến phẳng giả (16/11 15:00, v=0) và ghi nến
+// 00:00 đêm thứ Sáu sang ngày thứ Hai. Kline 15p của EastMoney thì hỏng lịch
+// sử (≈ 11.857.000) → dựng nến 15p từ luồng 1 phút trends2 (giá đúng cả 5
+// ngày) và đè lên Sina. Dữ liệu THẬT chụp 17/11/2026 ~10:16 giờ Bắc Kinh.
+console.log('\n── Khung 15 phút: ghép trends2 EastMoney lên Sina ──');
+{
+  const M = await import('../src/lib/eastmoney.js');
+  const FX = fileURLToPath(new URL('./fixtures/nen15/', import.meta.url));
+  const docFx = (f) => JSON.parse(fs.readFileSync(path.join(FX, f), 'utf8'));
+  const trends = docFx('em_trends.json').trends;
+  const sinaTho = docFx('sina_15.json').nen;
+  const emK = docFx('em_15.json').klines;
+  const moc = (s) => Date.parse(s.trim().replace(' ', 'T') + ':00+08:00');
+  const nhan = (ts) => new Date(ts + 8 * H).toISOString().slice(0, 16).replace('T', ' ');
+  const tangNghiemNgat = (a) => a.every((n, i) => i === 0 || n.timestamp > a[i - 1].timestamp);
+  const coDuHam = ['nenTuSina', 'lamSachNenSina', 'gopTrends15', 'ghepNen15']
+    .every((f) => typeof M[f] === 'function');
+  ok('Có đủ 4 hàm thuần nenTuSina / lamSachNenSina / gopTrends15 / ghepNen15', coDuHam);
+  if (coDuHam) {
+    const sinaSach = M.lamSachNenSina(M.nenTuSina(sinaTho));
+    const nenEM = M.gopTrends15(trends, { nenSina: sinaSach });
+    const ghep = M.ghepNen15(sinaSach, nenEM);
+    const theoMoc = new Map(ghep.map((n) => [n.timestamp, n]));
+
+    // (1) Mọi nến EM chính thức đã đóng: khớp tuyệt đối O/H/L/C/V
+    const daDong = emK.slice(0, -1);                 // nến cuối 10:15 đang chạy lúc chụp
+    const lech = [];
+    for (const dong of daDong) {
+      const [t, o, c, h, l, v] = dong.split(',');
+      const n = theoMoc.get(moc(t));
+      if (!n) { lech.push(`${t}: thiếu`); continue; }
+      const sai = [['O', n.open, +o], ['H', n.high, +h], ['L', n.low, +l], ['C', n.close, +c], ['V', n.volume, +v]]
+        .filter(([, a, b]) => a !== b).map(([k, a, b]) => `${k} ${a}≠${b}`);
+      if (sai.length) lech.push(`${t}: ${sai.join(' ')}`);
+    }
+    ok(`${daDong.length} nến EM chính thức đã đóng khớp tuyệt đối O/H/L/C/V`,
+       lech.length === 0, lech.slice(0, 4).join(' · ') || `${daDong.length}/${daDong.length}`);
+
+    // (2) Tăng dần nghiêm ngặt, không trùng mốc
+    ok('Chuỗi ghép tăng dần nghiêm ngặt, không trùng mốc', tangNghiemNgat(ghep), `${ghep.length} nến`);
+
+    // (3) Nến 00:00 đêm thứ Sáu về đúng chỗ
+    const viTri = (s) => ghep.findIndex((n) => n.timestamp === moc(s));
+    const i00 = viTri('2026-11-14 00:00');
+    ok('Nến 14/11 00:00 nằm giữa 13/11 23:45 và 14/11 00:15',
+       i00 > 0 && viTri('2026-11-13 23:45') === i00 - 1 && viTri('2026-11-14 00:15') === i00 + 1);
+    ok('Không còn nến ma "2026-11-16 00:00"', viTri('2026-11-16 00:00') < 0);
+
+    // (4) Nến phẳng giả của Sina đã bị thay
+    const n1500 = theoMoc.get(moc('2026-11-16 15:00'));
+    ok('Nến 16/11 15:00 không phẳng (high > low, volume > 0)',
+       !!n1500 && n1500.high > n1500.low && n1500.volume > 0,
+       n1500 ? `h ${n1500.high} l ${n1500.low} v ${n1500.volume}` : 'thiếu nến');
+
+    // (5) Ngày trends2 không có open (open=0): giá mở vẫn hợp lệ
+    const ngay12 = ghep.filter((n) => nhan(n.timestamp).startsWith('2026-11-12'));
+    ok('12/11 (open=0 trong trends2): mọi nến open > 0 và low ≤ open ≤ high',
+       ngay12.length > 20 && ngay12.every((n) => n.open > 0 && n.low <= n.open && n.open <= n.high),
+       `${ngay12.length} nến`);
+
+    // (6) trends2 rỗng → Sina đã làm sạch
+    const chiSina = M.ghepNen15(sinaSach, M.gopTrends15([], { nenSina: sinaSach }));
+    ok('trends2 rỗng → kết quả = Sina đã làm sạch',
+       chiSina.length === sinaSach.length && chiSina.every((n, i) => n.timestamp === sinaSach[i].timestamp));
+    const viTriS = (s) => chiSina.findIndex((n) => n.timestamp === moc(s));
+    const j00 = viTriS('2026-11-14 00:00');
+    ok('  …vẫn tăng dần nghiêm ngặt và nến 14/11 00:00 đúng chỗ',
+       tangNghiemNgat(chiSina) && j00 > 0 && viTriS('2026-11-13 23:45') === j00 - 1
+       && viTriS('2026-11-14 00:15') === j00 + 1 && viTriS('2026-11-16 00:00') < 0);
+
+    // (7) Không có mốc phiên không tồn tại
+    const mocCam = ghep.filter((n) => ['10:30', '21:00', '09:00', '13:30'].includes(nhan(n.timestamp).slice(11)));
+    ok('Không có nến mốc 10:30 / 21:00 / 09:00 / 13:30', mocCam.length === 0,
+       mocCam.slice(0, 3).map((n) => nhan(n.timestamp)).join(', '));
+
+    // Nến Sina cũ hơn đoạn EM phủ giữ nguyên
+    const dauEM = nenEM[0]?.timestamp;
+    const cuS = sinaSach.filter((n) => n.timestamp < dauEM);
+    ok('Nến Sina cũ hơn đoạn EM phủ giữ nguyên',
+       cuS.length > 0 && cuS.every((n) => theoMoc.get(n.timestamp) === n), `${cuS.length} nến`);
+
+    // Luồng trình duyệt: proxy Sina + trends2 → nguồn mạng đã ghép
+    const { layNen: layNen15, datGasUrl } = M;
+    datGasUrl('https://gas.vidu/exec');
+    let loiTrends = false;
+    globalThis.fetch = async (u) => {
+      const url = String(u);
+      if (url.includes('action=nenSina'))
+        return { ok: true, json: async () => ({ ok: true, ten: 'Nhôm SHFE (Sina)', nen: sinaTho }) };
+      if (url.includes('trends2')) {
+        if (loiTrends) throw new TypeError('Failed to fetch');
+        return { ok: true, json: async () => ({ data: { name: '沪铝主连', trends } }) };
+      }
+      return { ok: false, status: 404 };
+    };
+    const g8 = await layNen15('alm', '15', { boQuaCache: true });
+    const g8m = new Map(g8.nen.map((n) => [n.timestamp, n]));
+    const n2230 = g8m.get(moc('2026-11-16 22:30'));
+    ok('layNen 15p: nến 16/11 22:30 mang khối lượng EastMoney (5351)', n2230?.volume === 5351, `v ${n2230?.volume}`);
+    ok('layNen 15p: nguồn mạng, tăng dần nghiêm ngặt', g8.nguon === 'mang' && tangNghiemNgat(g8.nen));
+    loiTrends = true;
+    const g9 = await layNen15('alm', '15', { boQuaCache: true });
+    ok('layNen 15p: trends2 lỗi → vẫn có nến Sina đã làm sạch, không ném lỗi',
+       g9.nguon === 'mang' && tangNghiemNgat(g9.nen) && !g9.nen.some((n) => n.timestamp === moc('2026-11-16 00:00')),
+       `${g9.nen.length} nến`);
+    ok('  …kèm cảnh báo cho người dùng', !!g9.canhBao, g9.canhBao);
+    datGasUrl('');
+  }
+}
+
 console.log(hong ? `\n${hong} phép kiểm SAI` : '\nToàn bộ phép kiểm ĐÚNG');
 process.exit(hong ? 1 : 0);

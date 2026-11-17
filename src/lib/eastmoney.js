@@ -25,7 +25,7 @@ const TTL_SS = 12 * 60 * 60 * 1000;        // 12 giờ
 const TOI_DA_LUU = 900;                    // số nến lưu vào sessionStorage (tránh đầy quota)
 // Đổi số này mỗi khi sửa cách phân tích dữ liệu → cache cũ tự bị bỏ, không cần
 // người dùng xoá tay. (v1 từng lưu nhầm nến ngày dưới khoá khung giờ.)
-const PB_CACHE = 'v3';   // v3: 15/60 chuyển nguồn Sina
+const PB_CACHE = 'v4';   // v3: 15/60 chuyển nguồn Sina · v4: 15p ghép trends2 EastMoney (17/11)
 
 export const MA_NHOM = [
   { ma: 'alm', ten: 'Nhôm Thượng Hải A00', lo: 5,  buocGia: 5 },
@@ -47,6 +47,9 @@ export const KHUNG_TG = [
   //   • Sina KHÔNG mở CORS → trình duyệt đi qua proxy Apps Script (doGet
   //     action=nenSina, có whitelist + cache); lưới đỡ là ảnh chụp tĩnh do
   //     chup-nen.mjs tải bằng curl.
+  // 17/11/2026: riêng 15p, Sina lệch EastMoney (giá 1 bước, khối lượng, nến
+  // phẳng giả, nến 00:00 sai ngày) → đè nến dựng từ luồng 1 phút trends2 lên
+  // (xem gopTrends15 / ghepNen15). Khung 60 vẫn thuần Sina.
   { k: '15',     l: '15 phút',    klt: 15,   period: { span: 15, type: 'minute' }, soNen: 400, sina: true },
   { k: '60',     l: '1 giờ',      klt: 60,   period: { span: 1,  type: 'hour'   }, soNen: 500, sina: true },
   { k: '101',    l: 'Ngày',       klt: 101,  period: { span: 1,  type: 'day'    }, soNen: 800  },
@@ -160,6 +163,146 @@ export function locNenHopLe(nen, { lo = 5, ten = 'nguồn' } = {}) {
   return { nen: hopLe, boDi: boDi.length };
 }
 
+// ─── Khung 15 phút: dựng nến từ luồng 1 phút EastMoney, đè lên Sina ──────
+// VÌ SAO (đo 17/11/2026, 21 nến gần nhất so với nến chính thức EastMoney):
+//   • Sina lệch O/H/L/C một bước giá ở 11/21 nến, khối lượng sai nặng
+//     (16/11 22:30: EM 5351 — Sina 921), có nến phẳng giả o=h=l=c, v=0
+//     (16/11 15:00), và ghi nến 00:00 đêm thứ Sáu sang ngày thứ Hai.
+//   • Kline 15p của EastMoney vẫn hỏng lịch sử (≈ 11.857.000) → không dùng.
+//   • Luồng 1 phút trends2 (ndays=5) giá ĐÚNG cả 5 ngày; gộp lại khớp 20/21
+//     nến chính thức (nến còn lại là nến đang chạy lúc đo).
+// Các hàm dưới đây là hàm THUẦN (không I/O) để trình duyệt và
+// tools/chup-nen.mjs dùng chung một phép ghép.
+const PHUT = 60000;
+const P15 = 15 * PHUT;
+// Phút trong ngày theo giờ Bắc Kinh (+08:00, không theo giờ máy)
+const phutBK = (ts) => { const d = new Date(ts + 8 * 3600000); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
+
+/** Mảng Sina [{d,o,h,l,c,v}] → nến của app, GIỮ NGUYÊN thứ tự gốc (lamSachNenSina cần). */
+export function nenTuSina(arr) {
+  const nen = [];
+  for (const r of arr || []) {
+    const ts = sangMoc(r.d);
+    if (ts == null) continue;
+    nen.push({ timestamp: ts, open: so(r.o), high: so(r.h), low: so(r.l),
+               close: so(r.c), volume: so(r.v) ?? 0, turnover: 0 });
+  }
+  return nen;
+}
+
+/**
+ * Làm sạch nến 15p của Sina (đầu vào theo THỨ TỰ GỐC của Sina).
+ * Sina đẩy nến 00:00 của đêm thứ Sáu xuống CUỐI phiên đêm (sau nến 01:00 thứ
+ * Bảy) và ghi ngày thứ Hai ("2026-11-16 00:00:00" thay vì 14/11 00:00) → sắp
+ * theo mốc thì nến này nhảy sang sáng thứ Hai, sai vị trí. Nhận diện: nến
+ * 00:00 không đứng ngay sau nến 23:45 liền trước nó, trong khi nến đứng
+ * trước nó thuộc cùng phiên đêm với một nến 23:45 (ngày D) mà khe D+1 00:00
+ * còn trống, và mốc ghi sai cách xa hơn một ngày → gán về D+1 00:00.
+ * Sau đó sắp tăng dần, khử trùng mốc (giữ bản xuất hiện sau trong nguồn).
+ */
+export function lamSachNenSina(nen) {
+  const co = new Set((nen || []).map((n) => n.timestamp));
+  const ra = [];
+  let moc2345 = null;                       // nến 23:45 gần nhất trong nguồn
+  for (const n of nen || []) {
+    let x = n;
+    const p = phutBK(n.timestamp);
+    if (p === 0 && moc2345 != null) {
+      const truoc = ra[ra.length - 1];
+      const khe = moc2345 + P15;
+      const dungCho = truoc && truoc.timestamp === n.timestamp - P15;
+      // nến trước thuộc cùng phiên đêm với 23:45 đó (tối đa tới 01:00)
+      const cungPhien = truoc && truoc.timestamp >= moc2345 && truoc.timestamp <= moc2345 + 75 * PHUT;
+      if (!dungCho && cungPhien && !co.has(khe) && n.timestamp - khe > 24 * 3600000) {
+        x = { ...n, timestamp: khe };
+        co.add(khe);
+      }
+    }
+    if (p === 23 * 60 + 45) moc2345 = n.timestamp;
+    ra.push(x);
+  }
+  ra.sort((a, b) => a.timestamp - b.timestamp);          // sort ổn định
+  const kq = [];
+  for (const n of ra) {
+    if (kq.length && kq[kq.length - 1].timestamp === n.timestamp) kq[kq.length - 1] = n;
+    else kq.push(n);
+  }
+  return kq;
+}
+
+/**
+ * Gộp luồng 1 phút trends2 ("YYYY-MM-DD HH:mm,open,close,high,low,volume,amount,avg",
+ * giờ Bắc Kinh, nhãn = CUỐI phút) thành nến 15p nhãn theo giờ KẾT THÚC —
+ * giống Sina và EastMoney (đầu phiên đêm 21:15, đầu ngày 09:15, sau nghỉ
+ * 10:45 và 13:45, qua nửa đêm 23:46…00:00 → nến 00:00 của ngày hôm sau).
+ *   • Phút t thuộc nến có mốc = làm tròn LÊN bội 15 phút.
+ *   • Điểm mở phiên (điểm đầu một phiên, phút chia hết 15, volume 0 — vd
+ *     21:00) thuộc nến KẾ TIẾP và giá của nó là giá mở nến đó.
+ *   • trends2 chỉ có trường open ở ngày giao dịch hiện hành (ngày cũ open=0)
+ *     → giá mở: open phút đầu nếu > 0; không thì open nến Sina cùng mốc nếu
+ *     nằm trong [low, high]; không nữa thì close nến trước, kẹp vào [low, high].
+ *   • H = max, L = min, C = close phút cuối, V = tổng volume,
+ *     turnover = tổng amount (để locNenHopLe soi được thang giá).
+ */
+export function gopTrends15(trends, { nenSina = [] } = {}) {
+  const sinaTheoMoc = new Map((nenSina || []).map((n) => [n.timestamp, n]));
+  const nen = [];
+  let tsTruoc = null;
+  let cur = null;
+  const dong = () => {
+    if (!cur) return;
+    const { n, dau } = cur;
+    let mo = dau.moPhien ? (dau.o > 0 ? dau.o : dau.c) : dau.o;
+    if (!(mo > 0)) {
+      const s = sinaTheoMoc.get(n.timestamp);
+      const truoc = nen[nen.length - 1];
+      if (s && s.open >= n.low && s.open <= n.high) mo = s.open;
+      else mo = Math.min(n.high, Math.max(n.low, truoc ? truoc.close : dau.c));
+    }
+    n.open = mo;
+    nen.push(n);
+    cur = null;
+  };
+  for (const s of trends || []) {
+    const c = String(s).split(',');
+    const ts = sangMoc(c[0]);
+    const o = so(c[1]), cl = so(c[2]), h = so(c[3]), l = so(c[4]);
+    const v = so(c[5]) ?? 0, tien = so(c[6]) ?? 0;
+    if (ts == null || !(cl > 0) || !(h > 0) || !(l > 0)) continue;
+    const dauPhien = tsTruoc == null || ts - tsTruoc > PHUT;
+    tsTruoc = ts;
+    const moPhien = dauPhien && ts % P15 === 0 && v === 0;   // +08:00 là bội 15 phút → % trên UTC vẫn đúng
+    const moc = moPhien ? ts + P15 : Math.ceil(ts / P15) * P15;
+    if (!cur || cur.n.timestamp !== moc) {
+      dong();
+      cur = { dau: { o, c: cl, moPhien },
+              n: { timestamp: moc, open: 0, high: h, low: l, close: cl, volume: 0, turnover: 0 } };
+    }
+    const n = cur.n;
+    n.high = Math.max(n.high, h);
+    n.low = Math.min(n.low, l);
+    n.close = cl;
+    n.volume += v;
+    n.turnover += tien;
+  }
+  dong();
+  return nen;
+}
+
+/**
+ * Ghép: nến EastMoney (gopTrends15) ĐÈ lên nến Sina ĐÃ LÀM SẠCH trong đoạn EM
+ * phủ [nến EM đầu, nến EM cuối] — mốc chỉ có ở EM thì thêm, nến Sina trong
+ * đoạn đó mà EM không có mốc thì bỏ (vd nến phẳng giả). Nến Sina ngoài đoạn
+ * giữ nguyên. EM rỗng → trả nguyên Sina. Kết quả tăng dần, không trùng mốc.
+ */
+export function ghepNen15(nenSina, nenEM) {
+  const sina = nenSina || [];
+  if (!nenEM?.length) return [...sina];
+  const dau = nenEM[0].timestamp, cuoi = nenEM[nenEM.length - 1].timestamp;
+  return [...sina.filter((n) => n.timestamp < dau || n.timestamp > cuoi), ...nenEM]
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
 // ─── Nhớ tạm ──────────────────────────────────────────────────────────────
 const ram = new Map();
 
@@ -251,24 +394,57 @@ let GAS_URL = '';
 export const datGasUrl = (u) => { GAS_URL = String(u || '').trim(); };
 export const coGasUrl = () => !!GAS_URL;
 
-async function taiNenSina(ma, khungK, signal) {
+async function taiNenSina(ma, khungK, signal, { lamSach = false } = {}) {
   if (ma !== 'alm') throw new Error(`khung phút chỉ có cho nhôm SHFE (mã ${ma} chưa hỗ trợ)`);
   if (!GAS_URL) throw new Error('chưa cấu hình Apps Script (⚙️ GitHub → Ghi GSheet)');
   const u = `${GAS_URL}?action=nenSina&symbol=AL0&type=${khungK}`;
   const d = await goiJSON(u, { signal, lanThu: 2, timeout: 12000 });
   if (!d?.ok || !Array.isArray(d.nen) || !d.nen.length)
     throw new Error(d?.error || 'proxy không trả về nến');
-  const nen = [];
-  for (const r of d.nen) {
-    const ts = sangMoc(r.d);
-    if (ts == null) continue;
-    nen.push({ timestamp: ts, open: so(r.o), high: so(r.h), low: so(r.l),
-               close: so(r.c), volume: so(r.v) ?? 0, turnover: 0 });
-  }
+  // Khung 15p: sửa nến 00:00 ghi sai ngày TRƯỚC khi lọc — nhận diện dựa vào
+  // thứ tự gốc của Sina, lọc bỏ nến hỏng trước thì có thể mất nến 23:45 làm mốc.
+  // Khung 60 giữ nguyên hành vi cũ.
+  const nen = lamSach ? lamSachNenSina(nenTuSina(d.nen)) : nenTuSina(d.nen);
   // Sina không có turnover → locNenHopLe chỉ soi được phần cơ bản. Chấp nhận
   // được: nguồn này đã đối chiếu chéo khớp EastMoney ngày 22/08.
   const q = locNenHopLe(nen, { lo: timMa(ma).lo, ten: 'Sina' });
   return { ten: d.ten || 'Nhôm SHFE (Sina)', nen: q.nen, kieu: 'nen' };
+}
+
+// ─── Nguồn 5: luồng 1 phút trends2 nhiều ngày — làm đúng nến 15p ─────────
+// ndays tối đa 5 (lớn hơn EastMoney trả rỗng). Lấy đủ 8 trường để có
+// open/high/low/volume/amount, khác taiTrongNgay chỉ cần giá + khối lượng.
+async function taiTrends5(ma, signal) {
+  const u = `${HOST_HIS}/api/qt/stock/trends2/get?secid=${THI_TRUONG}.${ma}`
+    + '&ndays=5&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'
+    + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58';
+  const d = (await goiJSON(u, { signal })).data;
+  if (!d?.trends?.length) throw new Error('EastMoney trả luồng 1 phút rỗng');
+  return d.trends;
+}
+
+// Khung 15p = Sina (đã làm sạch) + nến dựng từ trends2 đè lên. Hai nguồn tải
+// SONG SONG. Sina là xương sống: Sina lỗi thì ném để layNen lùi như cũ
+// (sessionStorage → ảnh tĩnh). trends2 chỉ là lớp làm đúng: lỗi/rỗng/sai
+// thang giá thì vẫn trả Sina đã làm sạch, kèm canhBao cho người dùng biết.
+async function taiNen15(ma, signal) {
+  const huaEM = ma === 'alm' && GAS_URL ? taiTrends5(ma, signal).catch((e) => e) : null;
+  const goi = await taiNenSina(ma, '15', signal, { lamSach: true });
+  let loiEM;
+  try {
+    const kq = await huaEM;
+    if (!kq) return goi;
+    if (kq instanceof Error) throw kq;
+    const nenEM = gopTrends15(kq, { nenSina: goi.nen });
+    if (!nenEM.length) throw new Error('luồng 1 phút rỗng');
+    const q = locNenHopLe(ghepNen15(goi.nen, nenEM), { lo: timMa(ma).lo, ten: 'EastMoney + Sina' });
+    return { ...goi, nen: q.nen };
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    loiEM = e;
+  }
+  return { ...goi, canhBao: `Không tải được luồng 1 phút EastMoney (${loiEM.message}) — `
+    + 'nến 15 phút đang theo Sina, có thể lệch EastMoney một bước giá.' };
 }
 
 // ═══ HÀM CHÍNH ═══════════════════════════════════════════════════════════
@@ -287,7 +463,7 @@ export async function layNen(ma, khungK, { signal, boQuaCache = false } = {}) {
     const goi = kh.klt == null
       ? await taiTrongNgay(ma, signal)
       : kh.sina
-        ? await taiNenSina(ma, khungK, signal)
+        ? (khungK === '15' ? await taiNen15(ma, signal) : await taiNenSina(ma, khungK, signal))
         : await taiNenK(ma, kh.klt, kh.soNen, signal);
     ram.set(khoa, { goi, luc: Date.now() });
     ghiSS(khoa, goi);

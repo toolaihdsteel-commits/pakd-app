@@ -12,6 +12,9 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+// Dùng CHUNG phép ghép 15p với trình duyệt — ảnh tĩnh và biểu đồ sống không
+// được lệch nhau (hàm thuần, không I/O; import được từ node trần).
+import { nenTuSina, lamSachNenSina, gopTrends15, ghepNen15 } from '../src/lib/eastmoney.js';
 
 const CURL = process.platform === 'win32'
   ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'curl.exe')
@@ -224,9 +227,28 @@ for (const c of canLam) {
       let nen, tenHien;
       if (bt.sina) {
         const arr = await goiSina(bt.sina.symbol, bt.sina.type);
-        nen = docNenSina(arr);
-        if (nen.length > c.lmt) nen = nen.slice(-c.lmt);
         tenHien = `Nhôm SHFE ${bt.sina.symbol} (Sina)`;
+        if (c.khung === '15') {
+          // 15p (17/11/2026): Sina lệch EastMoney một bước giá, khối lượng
+          // sai, có nến phẳng giả, nến 00:00 đêm thứ Sáu mang ngày thứ Hai.
+          // Làm sạch Sina rồi đè nến dựng từ luồng 1 phút trends2 lên — y
+          // hệt trình duyệt. trends2 lỗi thì vẫn ghi Sina đã làm sạch.
+          nen = lamSachNenSina(nenTuSina(arr));
+          try {
+            const d = (await goi('https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=113.alm'
+              + '&ndays=5&iscr=0&iscca=0&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13'
+              + '&fields2=f51,f52,f53,f54,f55,f56,f57,f58', 2)).data;
+            const nenEM = gopTrends15(d?.trends || [], { nenSina: nen });
+            if (!nenEM.length) throw new Error('trends2 rỗng');
+            nen = ghepNen15(nen, nenEM);
+            tenHien = 'Nhôm SHFE AL0 (Sina + EastMoney 1 phút)';
+          } catch (e) {
+            ghiChu.push(`trends2: ${/Command failed|phản hồi rỗng/i.test(e.message) ? 'bị chặn' : e.message.slice(0, 40)} — giữ Sina đã làm sạch`);
+          }
+        } else {
+          nen = docNenSina(arr);
+        }
+        if (nen.length > c.lmt) nen = nen.slice(-c.lmt);
         const k = kiemNen(nen, lo);
         if (!k.ok) { ghiChu.push(`${bt.ten}: sai thang giá ${k.sai}/${nen.length}`); continue; }
         dat = { nen, ten: tenHien, bt: bt.ten };
@@ -255,7 +277,8 @@ for (const c of canLam) {
       ten: dat.ten, ma: c.ma, khung: c.khung, nen: dat.nen,
       capNhat: new Date().toISOString().slice(0, 10), thamSo: dat.bt,
     }));
-    console.log(`✓ ${c.ma}_${c.khung}: ${dat.nen.length} nến (${dat.bt}) → ${(fs.statSync(f).size / 1024).toFixed(0)} KB`);
+    console.log(`✓ ${c.ma}_${c.khung}: ${dat.nen.length} nến (${dat.bt}) → ${(fs.statSync(f).size / 1024).toFixed(0)} KB`
+      + (ghiChu.length ? ` · ${ghiChu.join(' · ')}` : ''));
     ok++;
   } else {
     console.log(`✗ ${c.ma}_${c.khung}: ${ghiChu.join(' · ')}`);
