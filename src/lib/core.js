@@ -128,16 +128,25 @@ const parseVNDate=s=>{
 };
 
 // ── Lọc UpdatedImportPrice: chỉ giữ ngày gần hôm nay nhất ──
+// SỬA R17 (25/11/2026): chọn ngày mới nhất RIÊNG cho từng dòng giá (khoá mác+temper+dải dày, xem khoaDongGia).
+// Bản cũ lấy MỘT ngày mới nhất chung → A5052 cập nhật trước A1050 vài ngày bị loại mất giá.
+// Ngày không đọc được / ngày tương lai (> hôm nay + 1): trong khoá CÓ ngày hợp lệ → bỏ như cũ;
+// khoá KHÔNG có ngày hợp lệ nào → giữ mọi dòng của khoá đó (giống fallback cũ "không có ngày hợp lệ → trả nguyên").
 const filterLatestUIP=rows=>{
   if(!rows||rows.length===0) return rows;
   const today=Date.now();
-  const dates=rows.map(r=>parseVNDate(r.updateDate)).filter(d=>d>0&&d<=today+86400000);
-  if(dates.length===0) return rows;
-  const latestDate=Math.max(...dates);
-  const latestDay=new Date(latestDate).toDateString();
+  const hopLe=d=>d>0&&d<=today+86400000;
+  const maxNgay={};
+  rows.forEach(r=>{
+    const k=khoaDongGia(r),d=parseVNDate(r.updateDate);
+    if(!(k in maxNgay)) maxNgay[k]=0;
+    if(hopLe(d)&&d>maxNgay[k]) maxNgay[k]=d;
+  });
   const filtered=rows.filter(r=>{
+    const m=maxNgay[khoaDongGia(r)];
+    if(!m) return true; // khoá không có ngày hợp lệ → giữ
     const d=parseVNDate(r.updateDate);
-    return d>0&&new Date(d).toDateString()===latestDay;
+    return d>0&&new Date(d).toDateString()===new Date(m).toDateString();
   });
   return filtered.length>0?filtered:rows;
 };
@@ -156,10 +165,11 @@ const filterPrevWeekUIP=rows=>{
   // Lọc các rows trong tuần trước
   const inPrevWeek=rows.filter(r=>{const d=parseVNDate(r.updateDate);return d>=start&&d<=end;});
   if(inPrevWeek.length===0) return [];
-  // Lấy ngày cuối cùng trong tuần trước (ngày mới nhất)
-  const maxD=Math.max(...inPrevWeek.map(r=>parseVNDate(r.updateDate)));
-  const maxDay=new Date(maxD).toDateString();
-  return inPrevWeek.filter(r=>new Date(parseVNDate(r.updateDate)).toDateString()===maxDay);
+  // SỬA R17: lấy ngày mới nhất trong tuần trước RIÊNG cho từng dòng giá (khoaDongGia), không chung mọi mác.
+  // (Dòng không đọc được ngày vốn đã nằm ngoài khung tuần trước → không đổi so với cũ.)
+  const maxNgay={};
+  inPrevWeek.forEach(r=>{const k=khoaDongGia(r),d=parseVNDate(r.updateDate);if(d>(maxNgay[k]||0)) maxNgay[k]=d;});
+  return inPrevWeek.filter(r=>new Date(parseVNDate(r.updateDate)).toDateString()===new Date(maxNgay[khoaDongGia(r)]).toDateString());
 };
 
 // Việc 1 đợt 2: tính bước duyệt kế tiếp theo quy trình tuần tự.
@@ -265,10 +275,60 @@ const calcFloorForSku=(costBasisRaw, inputs)=>{
   return{floorPrice, creditCostRate, totalCostRate, storageRate, baseFinRate};
 };
 
+// ── SỬA R16 (25/11/2026): helper dùng chung cho GIÁ NHẬP NHÓM (cột "Giá nhập tuần trước" + "Giá nhập HT") ──
+// Chuẩn hoá mã mác/temper: bỏ dấu cách 2 đầu + viết hoa (" h32 " ≡ "H32").
+const chuanMa=s=>String(s??'').trim().toUpperCase();
+// Parse số; không hữu hạn (rỗng, chữ, NaN) → macDinh. Tránh bẫy `||0`/`||999` (0 hợp lệ bị đổi thành 999).
+const soHuuHan=(v,macDinh)=>{const n=typeof v==='number'?v:parseFloat(v);return Number.isFinite(n)?n:macDinh;};
+// SỬA R17: khoá 1 "dòng giá" trên Sheet = mác + temper (chuẩn hoá) + dải dày. Dùng cho filterLatestUIP / filterPrevWeekUIP.
+const khoaDongGia=r=>[chuanMa(r&&r.alloy),chuanMa(r&&r.temper),soHuuHan(r&&r.minThick,0),soHuuHan(r&&r.maxThick,Infinity)].join('|');
+// Tìm dòng giá nhập khớp 1 SKU: alloy+temper đã chuẩn hoá, dày trong [minThick, maxThick].
+// minThick rỗng → 0; maxThick rỗng → không giới hạn. Không khớp → null.
+// SỬA R17: nhiều dòng cùng khớp (vd dòng cũ dải dày chồng lấn) → lấy dòng updateDate MỚI NHẤT; hoà → dòng đứng trước.
+const timDongGia=(sku,bangGia)=>{
+  if(!sku||!bangGia||bangGia.length===0) return null;
+  const a=chuanMa(sku.alloy),t=chuanMa(sku.temper),thick=soHuuHan(sku.thickness,0);
+  let tot=null,totTs=-1;
+  bangGia.forEach(p=>{
+    if(!(chuanMa(p.alloy)===a&&chuanMa(p.temper)===t&&thick>=soHuuHan(p.minThick,0)&&thick<=soHuuHan(p.maxThick,Infinity))) return;
+    const ts=parseVNDate(p.updateDate||p.updatedate||'');
+    if(ts>totTs){tot=p;totTs=ts;}
+  });
+  return tot;
+};
+// Giá nhập BÌNH QUÂN GIA QUYỀN của 1 nhóm SKU theo 1 bảng giá (tuần trước / hiện tại).
+// Ghép CẶP {sku,dong} cho từng SKU (KHÔNG tách 2 mảng rồi truy cập theo chỉ số — lỗi R16 cũ).
+// trongSo(sku) = khối lượng dùng làm trọng số (dùng chung taoEffQ với calcMgmtGroups).
+// Chỉ SKU CÓ dòng giá (priceFC>0) VÀ trọng số >0 mới vào mẫu số; SKU thiếu giá đếm vào missing*.
+const giaNhapNhom=(dsSku,bangGia,tyGia,trongSo)=>{
+  const exR=soHuuHan(tyGia,0);
+  const w=typeof trongSo==='function'?trongSo:(r=>r.totalQty);
+  const cap=(dsSku||[]).map(sku=>({sku,dong:timDongGia(sku,bangGia)}));
+  let matchedQty=0,tuVND=0,tuFC=0,matchedCount=0,missingCount=0,missingQty=0,dateTs=0,date='';
+  cap.forEach(({sku,dong})=>{
+    const q=Math.max(soHuuHan(w(sku),0),0);
+    const fc=dong?soHuuHan(dong.priceFC,0):0;
+    if(!dong||!(fc>0)){missingCount++;missingQty+=q;return;}
+    matchedCount++;
+    // Ngày = ngày MỚI NHẤT trong các dòng khớp (so bằng parseVNDate, trả lại chuỗi gốc dd/mm/yyyy)
+    const d=dong.updateDate||dong.updatedate||'';
+    const ts=parseVNDate(d);
+    if(ts>dateTs){dateTs=ts;date=d;}else if(!date&&dateTs===0&&d) date=d; // ngày không parse được → giữ chuỗi đầu tiên
+    if(q<=0) return; // khớp giá nhưng khối lượng 0 → không vào mẫu số (không chia 0)
+    const coef=soHuuHan(dong.importCoef,1);
+    matchedQty+=q;tuFC+=q*fc;tuVND+=q*fc/1000*exR*coef;
+  });
+  return{
+    priceVND:matchedQty>0&&exR>0?tuVND/matchedQty:null,
+    priceFC:matchedQty>0?tuFC/matchedQty:null,
+    date,matchedCount,matchedQty,missingCount,missingQty,
+  };
+};
+
 const findUpdatedImportPrice=(sku,updatedPrices,exchangeRate)=>{
   if(!updatedPrices||updatedPrices.length===0) return null;
-  const thick=parseFloat(sku.thickness)||0;
-  const match=updatedPrices.find(p=>p.alloy===sku.alloy&&p.temper===sku.temper&&thick>=parseFloat(p.minThick||0)&&thick<=parseFloat(p.maxThick||999));
+  // SỬA R16: khớp qua timDongGia (chuẩn hoá hoa/thường + dấu cách, biên dày không dùng ||0/||999)
+  const match=timDongGia(sku,updatedPrices);
   if(!match) return null;
   // Chưa nhập tỷ giá (≤0) → KHÔNG quy đổi VND (tránh hiện số vô nghĩa như "4")
   const exRate=parseFloat(exchangeRate)||0;
@@ -337,45 +397,91 @@ const DEFAULT_MGMT_GROUPS=[
   {id:'g3',label:'A1050 H14 1.0–6.0mm', alloy:'A1050',temper:'',minThick:1.0,maxThick:6.0},
   {id:'g4',label:'A3003 H14 1.0–5.0mm', alloy:'A3003',temper:'H14',minThick:1.0,maxThick:5.0},
   {id:'g5',label:'A3003 H16 1.0–5.0mm', alloy:'A3003',temper:'H16',minThick:1.0,maxThick:5.0},
-  {id:'g6',label:'A5052 (tất cả)',        alloy:'A5052',temper:'',minThick:0,maxThick:99},
+  // SỬA R17 (25/11/2026): bỏ nhóm gộp g6 "A5052 (tất cả)" (trộn H32 với H34, lẫn H112 tồn lâu) →
+  // tách 2 nhóm khớp 1-1 với 2 dòng giá A5052 trên Sheet. Mã g6 KHÔNG dùng lại: nháp / phương án cũ có
+  // mgmtFloorOverride.g6, excludedMgmtSkus.g6 sẽ bị bỏ qua êm thay vì gán nhầm sang H32.
+  // legacyLabels: nhãn cũ để cột "Sàn trước" còn lấy được sàn ban hành gần nhất của nhóm gộp (sanTruocCuaNhom).
+  // A5052 H112 và A5052 mỏng hơn 1.0mm không thuộc nhóm nào (vẫn xem được ở chế độ Chi tiết + tab Tồn kho).
+  {id:'g7',label:'A5052 H32 1.0–99.0mm',alloy:'A5052',temper:'H32',minThick:1.0,maxThick:99.0,legacyLabels:['A5052 (tất cả)']},
+  {id:'g8',label:'A5052 H34 1.0–99.0mm',alloy:'A5052',temper:'H34',minThick:1.0,maxThick:99.0,legacyLabels:['A5052 (tất cả)']},
 ];
+
+// SỬA R17: "Sàn trước" của 1 nhóm từ map lịch sử (khoá theo nhãn). Không có nhãn mới → thử lần lượt legacyLabels;
+// lấy từ nhãn cũ thì trả BẢN SAO kèm cờ tuNhomCu (không sửa đối tượng gốc trong map). Không có → null.
+const sanTruocCuaNhom=(map,g)=>{
+  if(!map||!g) return null;
+  if(g.label&&map[g.label]) return map[g.label];
+  for(const l of (g.legacyLabels||[])){
+    if(map[l]) return {...map[l],tuNhomCu:l};
+  }
+  return null;
+};
+
+// SỬA R16: qty hiệu dụng = totalQty − PO chưa giao (nếu bật loại bỏ PO), không âm.
+// Tách ra để cột "Giá nhập tuần trước" (App.jsx) dùng CHUNG trọng số với calcMgmtGroups.
+const taoEffQ=(poByKey,excludePOFloor)=>(r)=>{
+  if(!excludePOFloor||!poByKey) return r.totalQty;
+  const rem=(poByKey[skuKeyNorm(r)]||{}).remaining||0;
+  return Math.max((r.totalQty||0)-rem,0);
+};
+// SỬA R16: tập SKU của 1 nhóm quản lý — matching (mọi SKU khớp nhóm) và active (đã trừ SKU bị loại tay).
+const skuCuaNhom=(floorPriceData,g,excludedSkus)=>{
+  const excluded=(excludedSkus&&excludedSkus[g.id])||[];
+  // SỬA R17: so mác/temper qua chuanMa ở cả 2 vế (" a5052 " ≡ "A5052"). temper nhóm rỗng = mọi temper.
+  const ga=chuanMa(g.alloy),gt=chuanMa(g.temper);
+  const matching=(floorPriceData||[]).filter(r=>{
+    if(chuanMa(r.alloy)!==ga) return false;
+    if(gt&&chuanMa(r.temper)!==gt) return false;
+    const t=parseFloat(r.thickness)||0;
+    return t>=g.minThick&&t<=g.maxThick;
+  });
+  // active = chưa bị loại
+  const active=matching.filter(r=>!excluded.includes(r.skuKey));
+  return{matching,active};
+};
 
 const calcMgmtGroups=(floorPriceData,groups,excludedSkus,poByKey,excludePOFloor)=>{
   // qty hiệu dụng = totalQty − PO chưa giao (nếu bật loại bỏ PO), không âm
-  const effQ=(r)=>{
-    if(!excludePOFloor||!poByKey) return r.totalQty;
-    const rem=(poByKey[skuKeyNorm(r)]||{}).remaining||0;
-    return Math.max((r.totalQty||0)-rem,0);
-  };
+  const effQ=taoEffQ(poByKey,excludePOFloor);
   return groups.map(g=>{
-    const excluded=(excludedSkus&&excludedSkus[g.id])||[];
-    const matching=floorPriceData.filter(r=>{
-      if(r.alloy!==g.alloy) return false;
-      if(g.temper&&r.temper!==g.temper) return false;
-      const t=parseFloat(r.thickness)||0;
-      return t>=g.minThick&&t<=g.maxThick;
-    });
-    // active = chưa bị loại
-    const active=matching.filter(r=>!excluded.includes(r.skuKey));
-    if(active.length===0) return{...g,skus:matching.length,activeSkus:0,totalQty:0,avgCost:0,avgNewImportPrice:0,avgFloor:0,avgCore:0,avgLoyal:0,avgNew:0,avgCompPrice:0,avgCompFloor:0};
+    const {matching,active}=skuCuaNhom(floorPriceData,g,excludedSkus);
+    if(active.length===0) return{...g,skus:matching.length,activeSkus:0,totalQty:0,avgCost:0,avgNewImportPrice:null,importMissingCount:0,importMissingQty:0,avgFloor:0,avgCore:0,avgLoyal:0,avgNew:0,avgCompPrice:0,avgCompFloor:0,compMissingCount:0};
     const totalQty=active.reduce((s,r)=>s+effQ(r),0);
     const wa=(field)=>{
       const tot=active.reduce((s,r)=>s+effQ(r)*(r[field]||0),0);
       return totalQty>0?tot/totalQty:0;
     };
+    // SỬA R16: bình quân CHỈ trên SKU có giá trị (null = chưa có giá → KHÔNG pha loãng mẫu số).
+    // canDuong=true (giá nhập): giá trị phải >0 mới tính. Trả {avg|null, missingCount, missingQty}.
+    const waDefined=(field,canDuong)=>{
+      let tu=0,mau=0,missingCount=0,missingQty=0;
+      active.forEach(r=>{
+        const q=effQ(r)||0,val=r[field];
+        const co=val!=null&&Number.isFinite(val)&&(!canDuong||val>0);
+        if(!co){missingCount++;missingQty+=q;return;}
+        tu+=q*val;mau+=q;
+      });
+      return{avg:mau>0?tu/mau:null,missingCount,missingQty};
+    };
+    const giaNhapHT=waDefined('newImportPriceVND',true);
+    // SỬA R17: giá đối thủ chỉ bình quân trên mã CÓ giá (>0); không mã nào có → 0 (giữ kiểu số như cũ).
+    const giaDT=waDefined('competitorPrice',true),sanDT=waDefined('competitorFloorPrice',true);
     return{
       ...g,
       skus:matching.length,
       activeSkus:active.length,
       totalQty,
       avgCost:wa('costBasisPhysical'),
-      avgNewImportPrice:wa('newImportPriceVND'),
+      avgNewImportPrice:giaNhapHT.avg, // SỬA R16: null khi không SKU nào có giá nhập
+      importMissingCount:giaNhapHT.missingCount,
+      importMissingQty:giaNhapHT.missingQty,
       avgFloor:wa('floorAbsolute'),
       avgCore:wa('priceCore'),
       avgLoyal:wa('priceLoyal'),
       avgNew:wa('priceNew'),
-      avgCompPrice:wa('competitorPrice'),
-      avgCompFloor:wa('competitorFloorPrice'),
+      avgCompPrice:giaDT.avg??0,
+      avgCompFloor:sanDT.avg??0,
+      compMissingCount:giaDT.missingCount,
     };
   });
 };
@@ -598,4 +704,4 @@ const defInputs={
   finCostPct: 1.5, // Được dùng như Chi phí Công Nợ (CN) trong mode fixed
 };
 
-export {tenNguoiCho,ALLOYS,PIN_SALT,hashPin,pinMatches,findByPin,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_MONTHLY_REVENUE,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,calcAlloySummary,calcFinance,calcFloorForSku,calcFloorPricePerSku,calcInventoryValue,calcInvoice,calcLanded,calcLimitsWarnings,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,coatingShort,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findSellPrice,findUpdatedImportPrice,fpct,fu,fv,groupBySku,normDim,normThick,parseCsv,parsePOData,parseVNDate,pn,poGet,poNum,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg};
+export {tenNguoiCho,chuanMa,soHuuHan,timDongGia,khoaDongGia,sanTruocCuaNhom,giaNhapNhom,taoEffQ,skuCuaNhom,ALLOYS,PIN_SALT,hashPin,pinMatches,findByPin,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_MONTHLY_REVENUE,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,calcAlloySummary,calcFinance,calcFloorForSku,calcFloorPricePerSku,calcInventoryValue,calcInvoice,calcLanded,calcLimitsWarnings,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,coatingShort,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findSellPrice,findUpdatedImportPrice,fpct,fu,fv,groupBySku,normDim,normThick,parseCsv,parsePOData,parseVNDate,pn,poGet,poNum,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg};

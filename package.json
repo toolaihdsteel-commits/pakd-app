@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "verify": "node tools/tdz.mjs && vite-node tools/smoke.mjs && vite-node tools/smoke-tabs.mjs && vite-node tools/kiem-lopphu.mjs && vite-node tools/kiem-minmax.mjs && vite-node tools/kiem-nen.mjs && vite-node tools/kiem-ichimoku.mjs && vite-node tools/kiem-duyet.mjs && vite build",
+    "verify": "node tools/tdz.mjs && vite-node tools/smoke.mjs && vite-node tools/smoke-tabs.mjs && vite-node tools/kiem-lopphu.mjs && vite-node tools/kiem-minmax.mjs && vite-node tools/kiem-nen.mjs && vite-node tools/kiem-ichimoku.mjs && vite-node tools/kiem-duyet.mjs && vite-node tools/kiem-gianhap.mjs && vite-node tools/kiem-nhomql.mjs && vite build",
     "smoke": "vite-node tools/smoke.mjs",
     "smoke:tabs": "vite-node tools/smoke-tabs.mjs",
     "tdz": "node tools/tdz.mjs",
@@ -15,6 +15,8 @@
     "kiem:minmax": "vite-node tools/kiem-minmax.mjs",
     "kiem:nen": "vite-node tools/kiem-nen.mjs",
     "kiem:ichimoku": "vite-node tools/kiem-ichimoku.mjs && vite-node tools/kiem-duyet.mjs",
+    "kiem:gianhap": "vite-node tools/kiem-gianhap.mjs",
+    "kiem:nhomql": "vite-node tools/kiem-nhomql.mjs",
     "chup:nen": "node tools/chup-nen.mjs"
   },
   "dependencies": {

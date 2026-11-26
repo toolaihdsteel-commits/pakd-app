@@ -3,7 +3,7 @@ const {useState,useEffect,useRef,useMemo,useCallback,Component}=React;
 import Chart from 'chart.js/auto';
 import {bienTheKhoa,khoaSku,nhanSku} from './lib/chuanhoa';
 import {PADangDungBar,docPADangDung,ghiPADangDung,dauPA,ngayGioPA,ngayNganPA,tuoiPA} from './components/PADangDung';
-import {tenNguoiCho,ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
+import {tenNguoiCho,giaNhapNhom,skuCuaNhom,taoEffQ,sanTruocCuaNhom,ALLOYS,COMBINING,DEFAULT_MGMT_GROUPS,GSHEET_CASHFLOW,GSHEET_FLOOR_HISTORY,GSHEET_INVENTORY,GSHEET_LIMITS,GSHEET_MINSTOCK,GSHEET_PO,GSHEET_UPDATED_IMPORT,LENGTHS,TEMPERS,THICKS,WIDTHS,approvalProgress,findByPin,hashPin,pinMatches,calcFinance,calcInventoryValue,calcFloorPricePerSku,calcInvoice,calcLanded,calcMgmtGroups,calcProductBreakdown,calcSkuBlend,coatingFromGSheet,defInputs,defInventory,defLimits,defMinStock,defProducts,defSP,defUpdatedImport,expandWildcardProducts,fetchCsv,fetchText,filterLatestUIP,filterPrevWeekUIP,findUpdatedImportPrice,fu,fv,groupBySku,normThick,parseCsv,parsePOData,parseVNDate,pn,sha256,skuKey,skuKeyNorm,skuLabel,stepOf,stripVN,uid,weightedAvg} from './lib/core';
 import {getCurrentWeekLabel,matchWeekLabel,parseCashFlowCSV} from './lib/cashflow';
 import {FilterBar,Ic,LimitBar,SkuLabelCell,SkuSel} from './components/ui';
 import {CashFlowTab} from './components/CashFlowTab';
@@ -1656,7 +1656,7 @@ ${e.message}`);
     return base.map(g=>{
       const ov=mgmtFloorOverride[g.id];
       // I.2: Default Sàn BH = Sàn trước nếu chưa nhập tay
-      const lastHist=lastPublishedFloorByGroup[g.label];
+      const lastHist=sanTruocCuaNhom(lastPublishedFloorByGroup,g); // SỬA R17: nhóm mới chưa có lịch sử → lấy nhãn cũ (legacyLabels)
       const publishedFloor=ov!=null&&ov>0?ov:(lastHist&&lastHist.publishedFloor>0?lastHist.publishedFloor:null);
       const baseFloor=publishedFloor||g.avgFloor;
       const corePrice=baseFloor*(1+(inputs.marginCore||0)/100);
@@ -3429,41 +3429,20 @@ URL.revokeObjectURL(url);
                           const pctPublished=g.publishedFloor?pctVsGV(g.publishedFloor, gv):null;
                           const isExpanded=expandedMgmtGroups[g.id]||false;
                           // I.2: Giá nhập tuần trước
+                          // SỬA R16 (25/11/2026): bản cũ .filter(Boolean) mảng giá rồi vẫn truy cập theo chỉ số SKU → lệch giá,
+                          // SKU không có giá (vd A5052 H112) vẫn nằm trong mẫu số → 69.345 thay vì ~106.220.
+                          // Nay ghép cặp SKU↔dòng giá qua giaNhapNhom; dùng CHUNG tập SKU active + trọng số effQ với cột Giá nhập HT.
                           const prevWeekMatch=(()=>{
                             if(!prevWeekImportPrices||prevWeekImportPrices.length===0) return null;
-                            const skuDetails2=floorPriceData.filter(r=>{
-                              if(r.alloy!==g.alloy) return false;
-                              if(g.temper&&r.temper!==g.temper) return false;
-                              const t=parseFloat(r.thickness)||0;
-                              return t>=g.minThick&&t<=g.maxThick;
-                            });
-                            if(skuDetails2.length===0) return null;
-                            const matches=skuDetails2.map(r=>{
-                              const thick=parseFloat(r.thickness)||0;
-                              return prevWeekImportPrices.find(p=>p.alloy===r.alloy&&p.temper===r.temper&&thick>=(parseFloat(p.minThick)||0)&&thick<=(parseFloat(p.maxThick)||999));
-                            }).filter(Boolean);
-                            if(matches.length===0) return null;
-                            // WA by qty
-                            const totQty=skuDetails2.reduce((s,r)=>s+r.totalQty,0);
-                            const exR=parseFloat(inputs.exchangeRate)||0;
-                            const priceVND=exR<=0?0:skuDetails2.reduce((s,r,idx)=>{
-                              const m=matches[idx];
-                              return s+r.totalQty*(m?(m.priceFC||0)/1000*exR*(m.importCoef||1):0);
-                            },0);
-                            const priceFc=skuDetails2.reduce((s,r,idx)=>{
-                              const m=matches[idx];return s+r.totalQty*(m?m.priceFC||0:0);
-                            },0);
-                            return{priceVND:totQty>0?priceVND/totQty:0,priceFC:totQty>0?priceFc/totQty:0,date:matches[0]?.updateDate||''};
+                            const {active:skuTinhGia}=skuCuaNhom(floorPriceData,g,excludedMgmtSkus);
+                            if(skuTinhGia.length===0) return null;
+                            const kq=giaNhapNhom(skuTinhGia,prevWeekImportPrices,inputs.exchangeRate,taoEffQ(poByKey,excludePOFloor));
+                            return kq.matchedCount>0?kq:null; // không SKU nào có dòng giá tuần trước → coi như không có tuần trước
                           })();
                           // I.3: Sàn trước đây
-                          const lastFloor=lastPublishedFloorByGroup[g.label]||null;
-                          // SKU detail rows for this group
-                          const skuDetails=floorPriceData.filter(r=>{
-                            if(r.alloy!==g.alloy) return false;
-                            if(g.temper&&r.temper!==g.temper) return false;
-                            const t=parseFloat(r.thickness)||0;
-                            return t>=g.minThick&&t<=g.maxThick;
-                          });
+                          const lastFloor=sanTruocCuaNhom(lastPublishedFloorByGroup,g); // SỬA R17: có cờ tuNhomCu nếu lấy từ nhãn cũ
+                          // SKU detail rows for this group — SỬA R17: dùng chung skuCuaNhom (chuẩn hoá mác/temper) cho khớp cột tổng
+                          const skuDetails=skuCuaNhom(floorPriceData,g,excludedMgmtSkus).matching;
                           const isExcluded=id=>excludedMgmtSkus[g.id]&&excludedMgmtSkus[g.id].includes(id);
                           return(
                           <React.Fragment key={g.id}>
@@ -3514,6 +3493,12 @@ URL.revokeObjectURL(url);
                                 <>
                                   <div className="mono" style={{fontWeight:800,color:'#1e40af',fontSize:'.82rem'}}>{fv(prevWeekMatch.priceVND)}</div>
                                   <div style={{fontSize:'.55rem',color:'#475569',fontWeight:600}}>{prevWeekMatch.date}</div>
+                                  {prevWeekMatch.missingCount>0&&<div style={{fontSize:'.56rem',color:'#b45309',fontWeight:700}} title="Các mã này không có dòng giá nhập tuần trước (khác mác/temper/dải dày) nên KHÔNG tính vào bình quân — giá trên chỉ bình quân các mã có giá.">⚠ {prevWeekMatch.missingCount} mã chưa có giá nhập ({fv(prevWeekMatch.missingQty)} kg)</div>}
+                                </>
+                              ):prevWeekMatch?(
+                                <>
+                                  <div className="mono" style={{fontWeight:800,color:'#1e40af',fontSize:'.82rem'}}>—</div>
+                                  {prevWeekMatch.missingCount>0&&<div style={{fontSize:'.56rem',color:'#b45309',fontWeight:700}} title="Các mã này không có dòng giá nhập tuần trước (khác mác/temper/dải dày) nên KHÔNG tính vào bình quân.">⚠ {prevWeekMatch.missingCount} mã chưa có giá nhập ({fv(prevWeekMatch.missingQty)} kg)</div>}
                                 </>
                               ):<span style={{color:'#94a3b8',fontSize:'.65rem',fontStyle:'italic'}} title="Không có dữ liệu giá nhập trong tuần trước (theo lịch). Kiểm tra cột UpdateDate trên GSheet tab Giá nhập.">— không có tuần trước</span>}
                             </td>
@@ -3528,6 +3513,7 @@ URL.revokeObjectURL(url);
                                       {g.avgNewImportPrice>prevWeekMatch.priceVND?'▲':'▼'}{fv(Math.abs(g.avgNewImportPrice-prevWeekMatch.priceVND))}
                                     </div>
                                   )}
+                                  {g.importMissingCount>0&&<div style={{fontSize:'.56rem',color:'#b45309',fontWeight:700}} title="Các mã này không có dòng giá nhập hiện tại (khác mác/temper/dải dày) nên KHÔNG tính vào bình quân — giá trên chỉ bình quân các mã có giá.">⚠ {g.importMissingCount} mã chưa có giá nhập ({fv(g.importMissingQty)} kg)</div>}
                                 </>}
                             </td>
                             {/* 🏭 BQ Đối thủ */}
@@ -3554,6 +3540,7 @@ URL.revokeObjectURL(url);
                                 <>
                                   <div className="mono" style={{fontWeight:400,color:'#92400e',fontSize:'.78rem',fontStyle:'italic'}}>{fv(lastFloor.publishedFloor)}</div>
                                   <div style={{fontSize:'.55rem',color:'#94a3b8',fontWeight:400}}>{lastFloor.issuedDate}</div>
+                                  {lastFloor.tuNhomCu&&<div style={{fontSize:'.52rem',color:'#b45309',fontWeight:600}} title={`Nhóm này chưa có lần ban hành riêng — đang hiện sàn ban hành gần nhất của nhóm cũ "${lastFloor.tuNhomCu}".`}>từ nhóm cũ {lastFloor.tuNhomCu}</div>}
                                 </>
                               ):<span style={{color:'#94a3b8',fontSize:'.65rem',fontStyle:'italic'}}>—</span>}
                             </td>
